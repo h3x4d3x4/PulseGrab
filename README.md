@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/embygrab_logo.png" alt="EmbyGrab Logo" width="150" />
+</p>
+
 # EmbyGrab — Browser Download Manager for Emby
 
 > **Download anything from your Emby server — directly through the browser, with zero extra software.** Supports built-in downloads, JDownloader, wget/curl scripts, QR codes, clipboard, and 10+ export formats.
