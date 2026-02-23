@@ -4,7 +4,7 @@
 
 # EmbyGrab — Browser Download Manager for Emby
 
-> **Download anything from your Emby server — directly through the browser, with zero extra software.** Supports built-in downloads, JDownloader, wget/curl scripts, QR codes, clipboard, and 10+ export formats.
+> **A browser userscript to download anything from your Emby server — directly through the browser, with zero extra software.** Supports built-in downloads, JDownloader, wget/curl scripts, QR codes, clipboard, and 10+ export formats. 
 
 ## Current Version: **v1.0**
 
@@ -14,8 +14,8 @@
 
 ## Quick Start
 
-1. **Install Tampermonkey** (Chrome / Edge / Firefox)
-2. **Add the script**: paste `EmbyGrab v1.0.js` into a new Tampermonkey script
+1. **Install a Userscript Manager** like Tampermonkey, Violentmonkey, or Greasemonkey in your browser (Chrome / Edge / Firefox / Safari).
+2. **Add the script**: Paste the `EmbyGrab v1.0.js` code into a new script in your manager.
 3. **Navigate** to your Emby server
 4. **Click** the floating **"Get Links"** button that appears on any page
 
