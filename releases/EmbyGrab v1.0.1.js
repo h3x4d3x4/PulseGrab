@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EmbyGrab - Complete Download Manager
 // @namespace    embygrab.manager
-// @version      1.0
+// @version      1.0.1
 // @description  Ultimate Emby download tool: 10 output formats, QR codes, email, built-in manager, wget/curl scripts, JDownloader integration & more!
 // @match        https://*/emby/*
 // @match        https://app.emby.media/*
@@ -193,7 +193,7 @@
 
   // ---------- Version Check & Cache Buster ----------
   // Moved here to ensure Settings object is initialized before logDebug is called
-  const SCRIPT_VERSION = '1.0';
+  const SCRIPT_VERSION = '1.0.1';
   const STORED_VERSION = GM_getValue('scriptVersion', null);
 
   if (STORED_VERSION !== SCRIPT_VERSION) {
@@ -8945,6 +8945,7 @@ animation: fadeIn 0.3s ease;
 
       // Use the robust helper function
       const { server, token, userId } = getServerAndToken();
+      const api = getApiClient();
 
       if (!server || !token) {
         throw new Error('Could not read server address or access token. Please refresh the page and try again.');
@@ -9653,7 +9654,7 @@ animation: fadeIn 0.3s ease;
         startBackgroundPrefetch();
       }
 
-      console.log('EmbyGrab v1.0 loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!');
+      console.log('EmbyGrab v1.0.1 loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!');
     }, 1000);
   }
 
