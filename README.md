@@ -6,16 +6,22 @@
 
 > **A browser userscript to download anything from your Emby server — directly through the browser, with zero extra software.** Supports built-in downloads, JDownloader, wget/curl scripts, QR codes, clipboard, and 10+ export formats. 
 
-## Current Version: **v1.0**
+## Current Version: **v1.0.1**
 
-**Latest Release**: [EmbyGrab v1.0.js](releases/EmbyGrab%20v1.0.js)
+**Latest Release**: [EmbyGrab v1.0.1.js](releases/EmbyGrab%20v1.0.1.js)
+
+---
+
+## Changelog
+### v1.0.1
+* Fixed `ReferenceError: Can't find variable: api` when processing TV Shows.
 
 ---
 
 ## Quick Start
 
 1. **Install a Userscript Manager** like Tampermonkey, Violentmonkey, or Greasemonkey in your browser (Chrome / Edge / Firefox / Safari).
-2. **Add the script**: Paste the `EmbyGrab v1.0.js` code into a new script in your manager.
+2. **Add the script**: Paste the `EmbyGrab v1.0.1.js` code into a new script in your manager.
 3. **Navigate** to your Emby server
 4. **Click** the floating **"Get Links"** button that appears on any page
 
@@ -98,7 +104,7 @@ EmbyGrab/
 ├── README.md                      # This file
 │
 ├── releases/                      # Current releases
-│   └── EmbyGrab v1.0.js          # Latest version
+│   └── EmbyGrab v1.0.1.js          # Latest version
 │
 ├── guides/                        # User guides
 │   ├── EMBYGRAB-QUICK-START.md
