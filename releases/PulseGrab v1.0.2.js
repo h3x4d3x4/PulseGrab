@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Complete Download Manager
 // @namespace    pulsegrab.manager
-// @version      1.0.1
+// @version      1.0.2
 // @description  Universal media server download tool for Emby, Plex & Jellyfin: 10 output formats, QR codes, email, built-in manager, wget/curl scripts, JDownloader integration & more!
 // @match        https://*/emby/*
 // @match        https://app.emby.media/*
@@ -277,7 +277,11 @@
       subtitleLanguages: '', // Empty = all, or comma separated 'eng,spa'
       // NEW v6.59: Bypass Download Restrictions
       // bypassMode: 'disabled', // 'disabled', 'directplay' (static=true), 'remux' (static=false, copy)
-      emulateClient: true     // Mimic 'Emby Web' client
+      emulateClient: true,     // Mimic 'Emby Web' client
+      // NEW v1.0.2: In-app update settings
+      githubPAT: '',
+      autoCheckUpdates: true,
+      updateCheckInterval: 24  // hours
     },
 
     get(key) {
@@ -335,7 +339,7 @@
 
   // ---------- Version Check & Cache Buster ----------
   // Moved here to ensure Settings object is initialized before logDebug is called
-  const SCRIPT_VERSION = '1.0.1';
+  const SCRIPT_VERSION = '1.0.2';
   const STORED_VERSION = GM_getValue('scriptVersion', null);
 
   if (STORED_VERSION !== SCRIPT_VERSION) {
@@ -350,6 +354,217 @@
     // Set new version
     GM_setValue('scriptVersion', SCRIPT_VERSION);
   }
+
+  // ---------- Update Checker ----------
+  const UpdateChecker = {
+    REPO_OWNER: 'h3x4d3x4',
+    REPO_NAME: 'PulseGrab',
+    _lastResult: null,
+
+    async check(force = false) {
+      const token = Settings.get('githubPAT');
+      if (!token) {
+        console.log('[PulseGrab] Update check skipped: no GitHub PAT configured');
+        return null;
+      }
+
+      if (!force) {
+        const lastCheck = GM_getValue('pulse_lastUpdateCheck', 0);
+        const interval = (Settings.get('updateCheckInterval') || 24) * 60 * 60 * 1000;
+        if (Date.now() - lastCheck < interval) {
+          // Return cached result if within interval
+          const cached = GM_getValue('pulse_lastUpdateResult', null);
+          if (cached) {
+            try { this._lastResult = JSON.parse(cached); } catch (e) { /* ignore */ }
+          }
+          return this._lastResult;
+        }
+      }
+
+      try {
+        const response = await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url: `https://api.github.com/repos/${this.REPO_OWNER}/${this.REPO_NAME}/releases/latest`,
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28'
+            },
+            timeout: 15000,
+            onload: resolve,
+            onerror: (err) => reject(new Error('Network error')),
+            ontimeout: () => reject(new Error('Request timed out'))
+          });
+        });
+
+        GM_setValue('pulse_lastUpdateCheck', Date.now());
+
+        if (response.status === 401 || response.status === 403) {
+          console.warn('[PulseGrab] Update check: invalid or expired GitHub token');
+          this._lastResult = null;
+          GM_setValue('pulse_lastUpdateResult', null);
+          return null;
+        }
+
+        if (response.status === 404) {
+          console.log('[PulseGrab] Update check: no releases found');
+          this._lastResult = null;
+          GM_setValue('pulse_lastUpdateResult', null);
+          return null;
+        }
+
+        if (response.status !== 200) {
+          console.warn(`[PulseGrab] Update check failed: HTTP ${response.status}`);
+          return null;
+        }
+
+        const release = JSON.parse(response.responseText);
+        const latestVersion = release.tag_name.replace(/^v/, '');
+
+        if (this.isNewer(latestVersion, SCRIPT_VERSION)) {
+          const asset = release.assets?.find(a => a.name.endsWith('.user.js') || a.name.endsWith('.js'));
+          this._lastResult = {
+            version: latestVersion,
+            changelog: release.body || '',
+            assetId: asset?.id || null,
+            assetName: asset?.name || null,
+            htmlUrl: release.html_url,
+            publishedAt: release.published_at
+          };
+          GM_setValue('pulse_lastUpdateResult', JSON.stringify(this._lastResult));
+          return this._lastResult;
+        }
+
+        // Current version is up to date
+        this._lastResult = null;
+        GM_setValue('pulse_lastUpdateResult', null);
+        return null;
+      } catch (e) {
+        console.warn('[PulseGrab] Update check failed:', e.message);
+        return null;
+      }
+    },
+
+    isNewer(latest, current) {
+      const a = latest.split('.').map(Number);
+      const b = current.split('.').map(Number);
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        if ((a[i] || 0) > (b[i] || 0)) return true;
+        if ((a[i] || 0) < (b[i] || 0)) return false;
+      }
+      return false;
+    },
+
+    async installUpdate() {
+      if (!this._lastResult?.assetId) {
+        window.open(this._lastResult?.htmlUrl || `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/releases`, '_blank');
+        return;
+      }
+
+      const token = Settings.get('githubPAT');
+      if (!token) return;
+
+      try {
+        showNotification('Downloading update...', 'info', 5000);
+
+        const response = await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url: `https://api.github.com/repos/${this.REPO_OWNER}/${this.REPO_NAME}/releases/assets/${this._lastResult.assetId}`,
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/octet-stream'
+            },
+            responseType: 'text',
+            timeout: 60000,
+            onload: resolve,
+            onerror: (err) => reject(new Error('Download failed')),
+            ontimeout: () => reject(new Error('Download timed out'))
+          });
+        });
+
+        if (response.status !== 200) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        // Create a blob URL with the script content and open it
+        // Tampermonkey/Violentmonkey will detect the userscript and prompt for installation
+        const blob = new Blob([response.responseText], { type: 'text/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        // Use a temporary anchor element to trigger download with .user.js extension
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = this._lastResult.assetName || `PulseGrab-v${this._lastResult.version}.user.js`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        showNotification(`Update v${this._lastResult.version} downloaded! Check your browser downloads or Tampermonkey.`, 'success', 8000);
+      } catch (e) {
+        console.error('[PulseGrab] Update download failed:', e);
+        showNotification(`Update download failed: ${e.message}. Opening release page instead...`, 'error', 5000);
+        window.open(this._lastResult?.htmlUrl || `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/releases`, '_blank');
+      }
+    },
+
+    showUpdateBanner() {
+      if (!this._lastResult) return;
+
+      const existing = document.getElementById('pulsegrab-update-banner');
+      if (existing) existing.remove();
+
+      const isDarkMode = Settings.get('darkMode');
+      const banner = document.createElement('div');
+      banner.id = 'pulsegrab-update-banner';
+      banner.style.cssText = `
+        position: fixed; top: 12px; right: 12px; z-index: 2147483647;
+        background: ${isDarkMode ? '#1a2332' : '#fff'}; color: ${isDarkMode ? '#e0e0e0' : '#1f2937'};
+        border: 1px solid ${isDarkMode ? '#2d4a6f' : '#ddd'}; border-left: 4px solid #22c55e;
+        border-radius: 8px; padding: 14px 18px; max-width: 360px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        animation: pulsegrab-slide-in 0.3s ease-out;
+      `;
+
+      const changelogPreview = this._lastResult.changelog
+        ? this._lastResult.changelog.split('\n').filter(l => l.trim()).slice(0, 3).join('<br>')
+        : 'Bug fixes and improvements';
+
+      banner.innerHTML = `
+        <style>@keyframes pulsegrab-slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }</style>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <span style="font-size:18px;">🚀</span>
+          <strong style="font-size:14px;">PulseGrab v${this._lastResult.version} Available</strong>
+          <button id="pulsegrab-dismiss-update" style="margin-left:auto; background:none; border:none; cursor:pointer; font-size:18px; color:${isDarkMode ? '#888' : '#999'}; padding:0 4px;">&times;</button>
+        </div>
+        <div style="font-size:12px; color:${isDarkMode ? '#aaa' : '#666'}; margin-bottom:10px; line-height:1.4;">${changelogPreview}</div>
+        <div style="display:flex; gap:8px;">
+          <button id="pulsegrab-install-update" style="flex:1; padding:7px 12px; background:#22c55e; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600;">Install Update</button>
+          <button id="pulsegrab-view-release" style="padding:7px 12px; background:${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; color:${isDarkMode ? '#ccc' : '#374151'}; border:1px solid ${isDarkMode ? '#444' : '#d1d5db'}; border-radius:6px; cursor:pointer; font-size:13px;">View</button>
+        </div>
+      `;
+
+      document.body.appendChild(banner);
+
+      banner.querySelector('#pulsegrab-dismiss-update').addEventListener('click', () => {
+        banner.style.animation = 'pulsegrab-slide-in 0.2s ease-in reverse';
+        setTimeout(() => banner.remove(), 200);
+        // Don't show again for this version
+        GM_setValue('pulse_dismissedUpdate', this._lastResult.version);
+      });
+
+      banner.querySelector('#pulsegrab-install-update').addEventListener('click', () => {
+        this.installUpdate();
+        banner.remove();
+      });
+
+      banner.querySelector('#pulsegrab-view-release').addEventListener('click', () => {
+        window.open(this._lastResult.htmlUrl || `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/releases`, '_blank');
+      });
+    }
+  };
 
   // ---------- Download History ----------
   const DownloadHistory = {
@@ -5766,10 +5981,55 @@ animation: fadeIn 0.3s ease;
               </div>
             </div>
           </div>
-          
+
+          <!-- Updates Section -->
+          <h3 style="margin: 32px 0 16px 0; color: ${isDarkMode ? '#e0e0e0' : '#1e293b'}; font: 600 18px system-ui, sans-serif;">Updates</h3>
+
+          <div class="settings-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Auto-Check for Updates</div>
+                  <div class="setting-desc">Periodically check GitHub for new PulseGrab releases.</div>
+                </div>
+                <div class="setting-control">
+                  <label class="custom-toggle">
+                    <input type="checkbox" id="auto-check-updates" ${currentSettings.autoCheckUpdates !== false ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Check Interval (hours)</div>
+                  <div class="setting-desc">How often to poll for updates. Minimum 1 hour.</div>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="update-check-interval" class="modern-input" value="${currentSettings.updateCheckInterval || 24}" min="1" max="168" style="width: 80px; text-align: center;">
+                </div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">GitHub Personal Access Token</div>
+                  <div class="setting-desc">Required for private repo access. Create one at GitHub → Settings → Developer Settings → Fine-grained tokens with <strong>Contents: Read</strong> permission.</div>
+                </div>
+                <div class="setting-control" style="width: 280px;">
+                  <input type="password" id="github-pat" class="modern-input" value="${currentSettings.githubPAT || ''}" placeholder="github_pat_..." style="width: 100%; font-family: monospace; font-size: 12px;">
+                </div>
+              </div>
+              <div class="setting-row" style="border-bottom: none;">
+                <div class="setting-info">
+                  <div class="setting-title">Manual Update Check</div>
+                  <div class="setting-desc">Check for updates right now.</div>
+                </div>
+                <div class="setting-control">
+                  <button id="check-updates-now" style="padding: 10px 20px; border: 1px solid ${isDarkMode ? '#4b5563' : '#cbd5e1'}; border-radius: 8px; background: ${isDarkMode ? '#252525' : '#f8fafc'}; color: ${isDarkMode ? '#e0e0e0' : '#1f2937'}; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">Check Now</button>
+                </div>
+              </div>
+          </div>
+
         </div>
       </div>
-      
+
       <!-- Footer (Absolutely Fixed to Bottom) -->
       <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 64px; padding: 0 24px; border-top: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'}; background: ${isDarkMode ? '#1a1a1a' : '#f9fafb'}; display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; gap: 8px;">
@@ -5824,6 +6084,44 @@ animation: fadeIn 0.3s ease;
     // About/Wiki buttons
     panel.querySelector('#show-about').addEventListener('click', showAboutDialog);
     panel.querySelector('#show-wiki').addEventListener('click', showWikiDialog);
+
+    // Update checker button
+    panel.querySelector('#check-updates-now').addEventListener('click', async (e) => {
+      const btn = e.target;
+      const pat = panel.querySelector('#github-pat').value.trim();
+      if (!pat) {
+        showNotification('Please enter a GitHub Personal Access Token first.', 'warning', 4000);
+        return;
+      }
+      // Temporarily save the PAT so the checker can use it
+      Settings.set('githubPAT', pat);
+      btn.textContent = 'Checking...';
+      btn.disabled = true;
+      try {
+        const update = await UpdateChecker.check(true);
+        if (update) {
+          btn.textContent = `v${update.version} available!`;
+          btn.style.color = '#22c55e';
+          btn.style.borderColor = '#22c55e';
+          UpdateChecker.showUpdateBanner();
+        } else {
+          btn.textContent = 'Up to date ✓';
+          btn.style.color = '#22c55e';
+          btn.style.borderColor = '#22c55e';
+          showNotification(`PulseGrab v${SCRIPT_VERSION} is the latest version.`, 'success', 3000);
+        }
+      } catch (err) {
+        btn.textContent = 'Check failed';
+        btn.style.color = '#ef4444';
+        showNotification(`Update check failed: ${err.message}`, 'error', 4000);
+      }
+      btn.disabled = false;
+      setTimeout(() => {
+        btn.textContent = 'Check Now';
+        btn.style.color = '';
+        btn.style.borderColor = '';
+      }, 5000);
+    });
 
     // NEW v6.55: Quality preset buttons
     const qualityPresets = panel.querySelectorAll('.quality-preset');
@@ -6066,6 +6364,14 @@ animation: fadeIn 0.3s ease;
           Settings.set('debugMode', debugMode);
           Settings.set('concurrentDownloads', Math.max(1, Math.min(5, concurrentDownloads))); // NEW v6.54: Save concurrent downloads
 
+          // Update settings
+          const githubPAT = settingsPanel.querySelector('#github-pat').value.trim();
+          const autoCheckUpdates = settingsPanel.querySelector('#auto-check-updates').checked;
+          const updateCheckInterval = Math.max(1, parseInt(settingsPanel.querySelector('#update-check-interval').value) || 24);
+          Settings.set('githubPAT', githubPAT);
+          Settings.set('autoCheckUpdates', autoCheckUpdates);
+          Settings.set('updateCheckInterval', updateCheckInterval);
+
           Settings.set('filterOptions', {
             minQuality: filterQuality,
             minFileSize: filterSizeMin,
@@ -6300,7 +6606,7 @@ animation: fadeIn 0.3s ease;
                         <div style="padding: 16px; background: ${isDarkMode ? '#252525' : '#f9fafb'}; border-radius: 8px; border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};">
                           <div style="display: flex; flex-direction: column; gap: 12px; font: 13px system-ui, sans-serif; color: ${isDarkMode ? '#d1d5db' : '#374151'};">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                              <span><strong style="color: ${isDarkMode ? '#e0e0e0' : '#1f2937'};">Version:</strong> ${SCRIPT_VERSION}</span>
+                              <span><strong style="color: ${isDarkMode ? '#e0e0e0' : '#1f2937'};">Version:</strong> ${SCRIPT_VERSION} ${UpdateChecker._lastResult ? `<span style="color:#22c55e; font-weight:600; margin-left:6px;">v${UpdateChecker._lastResult.version} available!</span>` : `<span style="color:#22c55e; margin-left:6px;">✓ up to date</span>`}</span>
                               <span><strong style="color: ${isDarkMode ? '#e0e0e0' : '#1f2937'};">Namespace:</strong> pulsegrab.manager</span>
                             </div>
 
@@ -10488,7 +10794,20 @@ animation: fadeIn 0.3s ease;
         startBackgroundPrefetch();
       }
 
-      console.log('PulseGrab v1.0.0 loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!');
+      console.log(`PulseGrab v${SCRIPT_VERSION} loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!`);
+
+      // Auto-check for updates
+      if (Settings.get('autoCheckUpdates')) {
+        UpdateChecker.check(false).then(update => {
+          if (update) {
+            const dismissed = GM_getValue('pulse_dismissedUpdate', '');
+            if (dismissed !== update.version) {
+              console.log(`[PulseGrab] Update available: v${update.version}`);
+              UpdateChecker.showUpdateBanner();
+            }
+          }
+        }).catch(() => { /* silent */ });
+      }
     }, 1000);
   }
 
