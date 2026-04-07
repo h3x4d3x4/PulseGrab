@@ -7548,6 +7548,64 @@ animation: fadeIn 0.3s ease;
               allItems.push(...episodes);
               console.log(`[Library] Added ${episodes.length} episodes from ${season.Name}`);
             }
+          } else if (item.Type === 'MusicArtist') {
+            // Expand music artist → albums → tracks
+            console.log(`[Library] Expanding artist: ${item.Name}`);
+
+            if (SERVER_TYPE === 'plex') {
+              const albumUrl = `${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`;
+              const albumData = await fetchWithRetry(albumUrl);
+              const albums = albumData.MediaContainer?.Metadata || [];
+
+              for (const album of albums) {
+                if (abortController?.signal.aborted) break;
+                if (requestDelay > 0) await new Promise(r => setTimeout(r, requestDelay));
+
+                const trackUrl = `${server}/library/metadata/${album.ratingKey}/children?X-Plex-Token=${token}`;
+                const trackData = await fetchWithRetry(trackUrl);
+                let tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
+                if (skipWatched) tracks = tracks.filter(t => !t.UserData?.Played);
+                allItems.push(...tracks);
+                console.log(`[Library] Added ${tracks.length} tracks from ${album.title}`);
+              }
+            } else {
+              // Emby/Jellyfin: fetch all audio items recursively under artist
+              const prefix = apiPrefix();
+              const params = new URLSearchParams({
+                ParentId: item.Id, Recursive: 'true', IncludeItemTypes: 'Audio',
+                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
+              });
+              if (skipWatched) params.append('IsPlayed', 'false');
+              const url = `${server}${prefix}/Items?${params.toString()}`;
+              const data = await fetchWithRetry(url);
+              const tracks = data?.Items || [];
+              allItems.push(...tracks);
+              console.log(`[Library] Added ${tracks.length} tracks from artist ${item.Name}`);
+            }
+          } else if (item.Type === 'MusicAlbum') {
+            // Expand music album → tracks
+            console.log(`[Library] Expanding album: ${item.Name}`);
+
+            if (SERVER_TYPE === 'plex') {
+              const trackUrl = `${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`;
+              const trackData = await fetchWithRetry(trackUrl);
+              let tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
+              if (skipWatched) tracks = tracks.filter(t => !t.UserData?.Played);
+              allItems.push(...tracks);
+              console.log(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
+            } else {
+              const prefix = apiPrefix();
+              const params = new URLSearchParams({
+                ParentId: item.Id, IncludeItemTypes: 'Audio',
+                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
+              });
+              if (skipWatched) params.append('IsPlayed', 'false');
+              const url = `${server}${prefix}/Items?${params.toString()}`;
+              const data = await fetchWithRetry(url);
+              const tracks = data?.Items || [];
+              allItems.push(...tracks);
+              console.log(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
+            }
           } else if (item.Type === 'BoxSet' || item.Type === 'Collection') {
             // Expand collections
             console.log(`[Library] Expanding collection: ${item.Name}`);
@@ -9178,6 +9236,118 @@ animation: fadeIn 0.3s ease;
         }
       }
 
+      // Process Music Artists → Albums → Tracks
+      const artistItems = items.filter(item => item.Type === 'MusicArtist');
+      const albumItems = items.filter(item => item.Type === 'MusicAlbum');
+
+      if (artistItems.length > 0) {
+        updateProgress(0, artistItems.length, "Expanding Music Artists...");
+        showNotification(`Found ${artistItems.length} artists, expanding to tracks...`, 'info', 3000);
+
+        let totalTracksFromArtists = 0;
+        let successfulArtists = 0;
+
+        for (let i = 0; i < artistItems.length; i++) {
+          if (abortController.signal.aborted) {
+            console.log('[Debug] Artist expansion cancelled by user');
+            throw new Error('Operation cancelled');
+          }
+
+          const artist = artistItems[i];
+          try {
+            updateProgress(i, artistItems.length, `Expanding ${artist.Name}...`);
+            console.log(`[Debug] Expanding artist ${i + 1}/${artistItems.length}: ${artist.Name} (ID: ${artist.Id})`);
+
+            let artistTracks = [];
+
+            if (SERVER_TYPE === 'plex') {
+              // Fetch albums from artist
+              const albumUrl = `${server}/library/metadata/${artist.Id}/children?X-Plex-Token=${token}`;
+              const albumData = await fetchWithRetry(albumUrl);
+              const albums = albumData.MediaContainer?.Metadata || [];
+
+              for (const album of albums) {
+                if (abortController.signal.aborted) break;
+
+                const trackUrl = `${server}/library/metadata/${album.ratingKey}/children?X-Plex-Token=${token}`;
+                const trackData = await fetchWithRetry(trackUrl);
+                const tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
+                artistTracks.push(...tracks);
+                console.log(`[Debug] Artist ${artist.Name}, Album ${album.title}: ${tracks.length} tracks`);
+
+                await new Promise(resolve => setTimeout(resolve, 100));
+              }
+            } else {
+              // Emby/Jellyfin: fetch all audio items recursively under artist
+              const prefix = apiPrefix();
+              const params = new URLSearchParams({
+                ParentId: artist.Id, Recursive: 'true', IncludeItemTypes: 'Audio',
+                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
+              });
+              const url = `${server}${prefix}/Items?${params.toString()}`;
+              const data = await fetchWithRetry(url);
+              artistTracks = data?.Items || [];
+            }
+
+            if (artistTracks.length > 0) {
+              downloadableItems.push(...artistTracks);
+              totalTracksFromArtists += artistTracks.length;
+              successfulArtists++;
+              console.log(`[Debug] Artist ${artist.Name}: Added ${artistTracks.length} tracks (running total: ${totalTracksFromArtists})`);
+            }
+
+            if (i < artistItems.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          } catch (artistError) {
+            const errorMsg = `Failed to expand artist ${artist.Name}: ${artistError.message}`;
+            console.error(errorMsg);
+            updateProgress(i, artistItems.length, `Expanding ${artist.Name}...`, errorMsg);
+          }
+        }
+
+        console.log(`[Debug] Artist expansion complete: ${totalTracksFromArtists} tracks from ${successfulArtists}/${artistItems.length} artists`);
+        if (totalTracksFromArtists > 0) {
+          showNotification(`Expanded ${successfulArtists} artists into ${totalTracksFromArtists} tracks`, 'info', 3000);
+        }
+      }
+
+      if (albumItems.length > 0) {
+        updateProgress(0, albumItems.length, "Expanding Music Albums...");
+        let totalTracksFromAlbums = 0;
+
+        for (let i = 0; i < albumItems.length; i++) {
+          if (abortController.signal.aborted) break;
+          const album = albumItems[i];
+          try {
+            let albumTracks = [];
+
+            if (SERVER_TYPE === 'plex') {
+              const trackUrl = `${server}/library/metadata/${album.Id}/children?X-Plex-Token=${token}`;
+              const trackData = await fetchWithRetry(trackUrl);
+              albumTracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
+            } else {
+              const prefix = apiPrefix();
+              const params = new URLSearchParams({
+                ParentId: album.Id, IncludeItemTypes: 'Audio',
+                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
+              });
+              const url = `${server}${prefix}/Items?${params.toString()}`;
+              const data = await fetchWithRetry(url);
+              albumTracks = data?.Items || [];
+            }
+
+            downloadableItems.push(...albumTracks);
+            totalTracksFromAlbums += albumTracks.length;
+            console.log(`[Debug] Album ${album.Name}: Added ${albumTracks.length} tracks`);
+          } catch (albumError) {
+            console.error(`Failed to expand album ${album.Name}:`, albumError);
+          }
+        }
+
+        console.log(`[Debug] Album expansion complete: ${totalTracksFromAlbums} tracks from ${albumItems.length} albums`);
+      }
+
       // NEW v6.52: Process regular Folders (recursive scan)
       const folderItems = items.filter(item => item.Type === 'Folder' && item.IsFolder);
       if (folderItems.length > 0) {
@@ -9253,6 +9423,8 @@ animation: fadeIn 0.3s ease;
           `- Containers: ${containers || 'none'}\n` +
           `- Folders: ${items.filter(i => i.IsFolder).length}\n` +
           `- Series processed: ${seriesItems.length}\n` +
+          `- Artists processed: ${artistItems.length}\n` +
+          `- Albums processed: ${albumItems.length}\n` +
           `- Collections processed: ${boxSetItems.length}\n\n` +
           `This might be because the items have different types than expected, or expansion failed. Check the console for detailed logs of what was processed.`
         );
