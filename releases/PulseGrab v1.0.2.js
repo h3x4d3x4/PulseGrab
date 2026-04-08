@@ -4,6 +4,7 @@
 // @version      1.0.2
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
+// @license      MIT
 // @homepageURL  https://hexadexa.io
 // @supportURL   https://github.com/h3x4d3x4/PulseGrab/issues
 // @updateURL    https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.2.js
