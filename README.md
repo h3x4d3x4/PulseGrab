@@ -12,7 +12,7 @@
 
 **If PulseGrab saves you time, consider supporting development:**
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/REPLACE_WITH_YOUR_KOFI_USERNAME)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
 ## Current Version: **v1.0.2**
