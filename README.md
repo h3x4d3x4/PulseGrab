@@ -6,6 +6,7 @@
 
 [![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
 
 > **A powerful browser userscript that turns any Emby, Plex, or Jellyfin media server into a direct download hub.** Grab movies, TV shows, music, photos, and entire libraries — straight from the browser with zero extra software. Supports built-in concurrent downloads, JDownloader integration, wget/curl script generation, QR codes, and 10+ export formats.
@@ -62,7 +63,7 @@
 ## Quick Start
 
 1. **Install a Userscript Manager** — [Tampermonkey](https://www.tampermonkey.net/), [Violentmonkey](https://violentmonkey.github.io/), or Greasemonkey in Chrome, Edge, Firefox, or Safari.
-2. **Add the script** — open `PulseGrab v1.0.2.js` in your userscript manager (or paste its contents into a new script).
+2. **Add the script** — install from [Greasy Fork](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager) (recommended) or download from [GitHub Releases](https://github.com/h3x4d3x4/PulseGrab/releases/latest).
 3. **Navigate** to your Emby, Plex, or Jellyfin server in the browser.
 4. **Click** the floating **"Get Links"** button that appears on any media page.
 
