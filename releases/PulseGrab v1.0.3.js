@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.2
+// @version      1.0.3
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
 // @homepageURL  https://hexadexa.io
 // @supportURL   https://github.com/h3x4d3x4/PulseGrab/issues
-// @updateURL    https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.2.js
-// @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.2.js
+// @updateURL    https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.3.js
+// @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.3.js
 // @icon         https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/assets/pulsegrab_logo.png
 // @connect      api.github.com
 // @connect      localhost
