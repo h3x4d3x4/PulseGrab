@@ -11,6 +11,8 @@
 // @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.2.js
 // @icon         https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/assets/pulsegrab_logo.png
 // @connect      api.github.com
+// @connect      localhost
+// @connect      127.0.0.1
 // @match        https://*/emby/*
 // @match        https://app.emby.media/*
 // @match        https://app.plex.tv/*
