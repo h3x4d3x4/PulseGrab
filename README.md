@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.0.3-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,13 +16,16 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.0.3**
+## Current Version: **v1.0.4**
 
-**Latest Release**: [PulseGrab v1.0.3.js](https://github.com/h3x4d3x4/PulseGrab/releases/latest)
+**Latest Release**: [PulseGrab v1.0.4.js](https://github.com/h3x4d3x4/PulseGrab/releases/latest)
 
 ---
 
 ## Changelog
+
+### v1.0.4
+* **In-app updater fix** — added `@connect release-assets.githubusercontent.com` and `@connect objects.githubusercontent.com`. The GitHub Releases asset API redirects to those hosts, and userscript managers were blocking the redirect, so clicking **Install Update** failed with a "Refused to connect / not whitelisted URL" error.
 
 ### v1.0.3
 * **JDownloader fix** — added `@connect localhost` and `@connect 127.0.0.1` to the userscript header. Userscript managers were blocking GM_xmlhttpRequest calls to `http://localhost:9666/flashgot`, breaking the "Send to JDownloader" action.
@@ -173,7 +176,7 @@ PulseGrab/
 ├── assets/
 │   └── pulsegrab_logo.png            # Project logo
 ├── releases/
-│   ├── PulseGrab v1.0.3.js           # Latest universal version (Emby + Plex + Jellyfin)
+│   ├── PulseGrab v1.0.4.js           # Latest universal version (Emby + Plex + Jellyfin)
 │   └── EmbyGrab v1.0.1.js            # Legacy Emby-only version
 ├── guides/
 │   ├── PULSEGRAB-QUICK-START.md      # Installation & first-use guide
