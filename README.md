@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.0.8-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.0.9-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,13 +16,17 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.0.8**
+## Current Version: **v1.0.9**
 
 **Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
 ---
 
 ## Changelog
+
+### v1.0.9
+* **Stop showing the "update available" banner after you've already updated** — the cached update result was returned blindly within the 24h check interval, so once a version was announced, the banner kept showing on every page load until the cache expired — even after the user actually installed that version. Now the cache is validated against the running `SCRIPT_VERSION`: if the cached "available" version is no longer newer than what's installed, the cache is cleared and treated as "no update."
+* **Check Now dismisses stale banners** — clicking **Check Now** with a fresh result of "up to date" now also removes any older update banner left over from a previous auto-check on the same page.
 
 ### v1.0.8
 * **Pass `userId` in show/season ID async fallback** — v1.0.7's new resolver called `getItemInfo` without a `userId`, so it hit the unscoped `/Items/{id}` endpoint which 404s on Emby Connect / non-admin user contexts. Now passes `userId` from `getServerAndToken()` so the fallback uses `/Users/{userId}/Items/{id}`, matching the rest of the codebase.

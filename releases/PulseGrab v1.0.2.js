@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.8
+// @version      1.0.9
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
@@ -377,12 +377,24 @@
         const lastCheck = GM_getValue('pulse_lastUpdateCheck', 0);
         const interval = (Settings.get('updateCheckInterval') || 24) * 60 * 60 * 1000;
         if (Date.now() - lastCheck < interval) {
-          // Return cached result if within interval
-          const cached = GM_getValue('pulse_lastUpdateResult', null);
-          if (cached) {
-            try { this._lastResult = JSON.parse(cached); } catch (e) { /* ignore */ }
+          // Return cached result if within interval, but only if the cached
+          // version is actually newer than the currently-installed version.
+          // Otherwise the user has updated past it — drop the stale cache so
+          // we don't keep showing a "new version available" banner for a
+          // version that's already installed.
+          const cachedRaw = GM_getValue('pulse_lastUpdateResult', null);
+          if (cachedRaw) {
+            try {
+              const cached = JSON.parse(cachedRaw);
+              if (cached?.version && this.isNewer(cached.version, SCRIPT_VERSION)) {
+                this._lastResult = cached;
+                return this._lastResult;
+              }
+              GM_setValue('pulse_lastUpdateResult', null);
+            } catch (e) { /* ignore */ }
           }
-          return this._lastResult;
+          this._lastResult = null;
+          return null;
         }
       }
 
@@ -6052,6 +6064,8 @@ animation: fadeIn 0.3s ease;
           btn.textContent = 'Up to date ✓';
           btn.style.color = '#22c55e';
           btn.style.borderColor = '#22c55e';
+          // Dismiss any stale banner from a previous auto-check on this page
+          document.getElementById('pulsegrab-update-banner')?.remove();
           showNotification(`PulseGrab v${SCRIPT_VERSION} is the latest version.`, 'success', 3000);
         }
       } catch (err) {
