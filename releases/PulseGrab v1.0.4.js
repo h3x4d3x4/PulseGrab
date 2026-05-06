@@ -1,18 +1,16 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.4
+// @version      1.0.5
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
 // @homepageURL  https://hexadexa.io
 // @supportURL   https://github.com/h3x4d3x4/PulseGrab/issues
-// @updateURL    https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.4.js
-// @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab%20v1.0.4.js
+// @updateURL    https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js
+// @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js
 // @icon         https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/assets/pulsegrab_logo.png
 // @connect      api.github.com
-// @connect      release-assets.githubusercontent.com
-// @connect      objects.githubusercontent.com
 // @connect      localhost
 // @connect      127.0.0.1
 // @match        https://*/emby/*
@@ -462,53 +460,13 @@
     },
 
     async installUpdate() {
-      if (!this._lastResult?.assetId) {
-        window.open(this._lastResult?.htmlUrl || `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/releases`, '_blank');
-        return;
-      }
-
-      try {
-        showNotification('Downloading update...', 'info', 5000);
-
-        const response = await new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: 'GET',
-            url: `https://api.github.com/repos/${this.REPO_OWNER}/${this.REPO_NAME}/releases/assets/${this._lastResult.assetId}`,
-            headers: {
-              'Accept': 'application/octet-stream'
-            },
-            responseType: 'text',
-            timeout: 60000,
-            onload: resolve,
-            onerror: (err) => reject(new Error('Download failed')),
-            ontimeout: () => reject(new Error('Download timed out'))
-          });
-        });
-
-        if (response.status !== 200) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        // Create a blob URL with the script content and open it
-        // Tampermonkey/Violentmonkey will detect the userscript and prompt for installation
-        const blob = new Blob([response.responseText], { type: 'text/javascript' });
-        const blobUrl = URL.createObjectURL(blob);
-
-        // Use a temporary anchor element to trigger download with .user.js extension
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = this._lastResult.assetName || `PulseGrab-v${this._lastResult.version}.user.js`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-        showNotification(`Update v${this._lastResult.version} downloaded! Check your browser downloads or Tampermonkey.`, 'success', 8000);
-      } catch (e) {
-        console.error('[PulseGrab] Update download failed:', e);
-        showNotification(`Update download failed: ${e.message}. Opening release page instead...`, 'error', 5000);
-        window.open(this._lastResult?.htmlUrl || `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/releases`, '_blank');
-      }
+      // Navigate to the stable .user.js URL — Tampermonkey/Violentmonkey
+      // intercept any navigation to a .user.js URL and show their native install
+      // prompt. This avoids download-to-disk and avoids GM_xmlhttpRequest entirely
+      // (so no @connect entries are needed for redirect targets).
+      const url = `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/raw/main/releases/PulseGrab.user.js`;
+      window.open(url, '_blank');
+      showNotification(`Opening installer for v${this._lastResult?.version || 'latest'}...`, 'info', 4000);
     },
 
     showUpdateBanner() {

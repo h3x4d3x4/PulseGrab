@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.0.5-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,13 +16,18 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.0.4**
+## Current Version: **v1.0.5**
 
-**Latest Release**: [PulseGrab v1.0.4.js](https://github.com/h3x4d3x4/PulseGrab/releases/latest)
+**Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
 ---
 
 ## Changelog
+
+### v1.0.5
+* **Stable update URL** — `@updateURL` and `@downloadURL` now point to a single stable filename `PulseGrab.user.js` instead of a per-version URL. Previous releases hardcoded their own filename, so each version bump silently broke auto-update for older installs (404). With v1.0.5 onward, version bumps no longer affect the update path.
+* **One-click in-app updates** — clicking **Install Update** now navigates directly to the userscript URL, which Tampermonkey/Violentmonkey intercept with their native install prompt. No more downloading a `.js` to your downloads folder and opening it manually.
+* **Cleaner `@connect` list** — removed `release-assets.githubusercontent.com` and `objects.githubusercontent.com` since the in-app updater no longer hits the GitHub release-asset CDN.
 
 ### v1.0.4
 * **In-app updater fix** — added `@connect release-assets.githubusercontent.com` and `@connect objects.githubusercontent.com`. The GitHub Releases asset API redirects to those hosts, and userscript managers were blocking the redirect, so clicking **Install Update** failed with a "Refused to connect / not whitelisted URL" error.
@@ -176,7 +181,8 @@ PulseGrab/
 ├── assets/
 │   └── pulsegrab_logo.png            # Project logo
 ├── releases/
-│   ├── PulseGrab v1.0.4.js           # Latest universal version (Emby + Plex + Jellyfin)
+│   ├── PulseGrab.user.js             # Stable URL — always serves the latest release
+│   ├── PulseGrab v1.0.4.js           # Per-version archive (kept for legacy install URLs)
 │   └── EmbyGrab v1.0.1.js            # Legacy Emby-only version
 ├── guides/
 │   ├── PULSEGRAB-QUICK-START.md      # Installation & first-use guide
