@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.7
+// @version      1.0.8
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
@@ -8408,6 +8408,9 @@ animation: fadeIn 0.3s ease;
   // Async resolver: tries DOM first (fast, no network), then falls back to
   // URL + Items API. The DOM path fails on app.emby.media and on any layout
   // that doesn't render itemBackdrop with the parent show's image URL.
+  // The unscoped /Items/{id} endpoint 404s for non-admin user contexts on
+  // many setups (notably Emby Connect remote servers), so we always pass
+  // userId when available to use the user-scoped /Users/{userId}/Items/{id}.
   async function resolveShowSeasonIdsAsync(server, token) {
     const fromDom = parseIdsFromPage();
     if (fromDom) return fromDom;
@@ -8416,7 +8419,8 @@ animation: fadeIn 0.3s ease;
     if (!itemId) return null;
 
     try {
-      const info = await getItemInfo(server, token, itemId);
+      const { userId } = getServerAndToken();
+      const info = await getItemInfo(server, token, itemId, userId);
       if (!info?.Type) return null;
 
       if (info.Type === 'Series') {
