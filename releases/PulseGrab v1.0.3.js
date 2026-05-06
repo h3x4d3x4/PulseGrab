@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.6
+// @version      1.0.7
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
@@ -8405,6 +8405,38 @@ animation: fadeIn 0.3s ease;
     }
   }
 
+  // Async resolver: tries DOM first (fast, no network), then falls back to
+  // URL + Items API. The DOM path fails on app.emby.media and on any layout
+  // that doesn't render itemBackdrop with the parent show's image URL.
+  async function resolveShowSeasonIdsAsync(server, token) {
+    const fromDom = parseIdsFromPage();
+    if (fromDom) return fromDom;
+
+    const itemId = getItemIdFromUrl();
+    if (!itemId) return null;
+
+    try {
+      const info = await getItemInfo(server, token, itemId);
+      if (!info?.Type) return null;
+
+      if (info.Type === 'Series') {
+        return { showId: String(itemId), seasonIdFromPath: String(itemId) };
+      }
+      if (info.Type === 'Season') {
+        if (!info.SeriesId) return null;
+        return { showId: String(info.SeriesId), seasonIdFromPath: String(itemId) };
+      }
+      if (info.Type === 'Episode') {
+        if (!info.SeriesId) return null;
+        return { showId: String(info.SeriesId), seasonIdFromPath: String(info.SeasonId || itemId) };
+      }
+      return null;
+    } catch (e) {
+      console.warn('[PulseGrab] resolveShowSeasonIdsAsync API fallback failed:', e.message);
+      return null;
+    }
+  }
+
   function getItemIdFromUrl() {
     try {
       const hash = window.location.hash;
@@ -9768,7 +9800,7 @@ animation: fadeIn 0.3s ease;
     }
 
     // Emby & Jellyfin: existing season-by-season logic
-    const ids = parseIdsFromPage();
+    const ids = await resolveShowSeasonIdsAsync(server, token);
     if (!ids) {
       throw new Error("Could not detect show/season IDs. Please ensure you're on a show or season page.");
     }
