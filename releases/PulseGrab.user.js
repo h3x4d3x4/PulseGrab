@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.5
+// @version      1.0.6
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
@@ -348,7 +348,8 @@
 
   // ---------- Version Check & Cache Buster ----------
   // Moved here to ensure Settings object is initialized before logDebug is called
-  const SCRIPT_VERSION = '1.0.2';
+  // Derived from the @version metadata header so we have a single source of truth.
+  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info?.script?.version) || '1.0.6';
   const STORED_VERSION = GM_getValue('scriptVersion', null);
 
   if (STORED_VERSION !== SCRIPT_VERSION) {
