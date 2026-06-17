@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.0.9-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.0.10-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,13 +16,24 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.0.9**
+## Current Version: **v1.0.10**
 
 **Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
 ---
 
 ## Changelog
+
+### v1.0.10
+Full audit pass across Emby, Plex, and Jellyfin — bug fixes, correctness, and polish.
+* **JDownloader now detected on macOS** — detection hit `http://localhost:9666`, which resolves to IPv6 `::1` first on macOS, but JDownloader's FlashGot server binds IPv4 `127.0.0.1` only, so it was never reached. Now tries `127.0.0.1` first with a `localhost` fallback and caches the host that answers. Also fixed auto-detect writing the wrong setting key (`enableJDownloader` vs `jdownloaderEnabled`), which meant detecting JD never actually armed the send path.
+* **Stops injecting on non–media-server pages** — added a runtime guard so the floating button only appears when a real Emby/Plex/Jellyfin client is detected, instead of on any page whose URL merely contains `/web/`.
+* **Folder/collection pagination no longer truncates** — when a server omitted `TotalRecordCount`, scanning stopped after the first page and silently dropped items. Now keeps paging while full pages are returned.
+* **Correct IDs on Jellyfin / GUID servers** — item/season detection handled only numeric IDs (`\d+`) and matched the `id=` inside `serverId=`/`parentId=`; both fixed so GUID-based servers resolve the right item.
+* **Emby Connect `userId` fallback** — resolves UserId from additional ApiClient fields and stored credentials to avoid the unscoped `/Items/{id}` 404 on remote/non-admin sessions.
+* **Generated scripts fixed & hardened** — the Python rename script was invalid Python (`try {` braces); `.sh`/`.bat` renamers now sort files by JDownloader's numeric order instead of grouping by extension; URLs and paths in all wget/curl/PowerShell/Python output are properly quoted/escaped.
+* **Download Manager reliability** — removing items mid-download no longer corrupts other downloads' progress; "Cancel All" and closing the manager now actually abort in-flight downloads (previously they kept streaming); removed a duplicate keyboard handler that double-fired Escape/Space and leaked.
+* **UI/UX polish** — fixed broken CSS so the progress bar fills correctly and error rows render; QR codes now load via `@require` (page CSP previously blocked them); download history is corruption-safe and capped; notifications are click-to-dismiss and screen-reader announced; Season 0 (Specials) is no longer mislabeled as Season 01.
 
 ### v1.0.9
 * **Stop showing the "update available" banner after you've already updated** — the cached update result was returned blindly within the 24h check interval, so once a version was announced, the banner kept showing on every page load until the cache expired — even after the user actually installed that version. Now the cache is validated against the running `SCRIPT_VERSION`: if the cached "available" version is no longer newer than what's installed, the cache is cleared and treated as "no update."

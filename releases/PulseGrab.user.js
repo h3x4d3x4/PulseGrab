@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.9
+// @version      1.0.10
 // @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
@@ -13,6 +13,7 @@
 // @connect      api.github.com
 // @connect      localhost
 // @connect      127.0.0.1
+// @require      https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js
 // @match        https://*/emby/*
 // @match        https://app.emby.media/*
 // @match        https://app.plex.tv/*
@@ -199,7 +200,7 @@
     parallelSeasonFetches: 5,  // Number of concurrent season fetches
     cacheTTL: 300000,  // Cache TTL: 5 minutes (300000ms)
     enableRequestCache: true,
-    concurrentDownloads: 2,  // Number of simultaneous downloads in Download Manager
+    concurrentDownloads: 3,  // Number of simultaneous downloads in Download Manager
     enableBackgroundPrefetch: true,
     outputFormats: {
       'links': 'Plain URLs',
@@ -540,10 +541,41 @@
 
   // ---------- Download History ----------
   const DownloadHistory = {
+    MAX_ENTRIES: 5000,
+
+    // Safe read: corrupted/truncated storage (e.g. after a quota-limited write)
+    // must never throw and break the scan flow.
+    _read() {
+      try {
+        const parsed = JSON.parse(GM_getValue('pulse_dl_history', '{}'));
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+      } catch (e) {
+        console.warn('[History] Corrupted history, resetting:', e.message);
+        return {};
+      }
+    },
+
+    // Cap growth: evict oldest entries by date so storage can't grow unbounded
+    // until parses start failing.
+    _write(history) {
+      try {
+        const keys = Object.keys(history);
+        if (keys.length > this.MAX_ENTRIES) {
+          keys
+            .sort((a, b) => String(history[a]?.date || '').localeCompare(String(history[b]?.date || '')))
+            .slice(0, keys.length - this.MAX_ENTRIES)
+            .forEach(k => delete history[k]);
+        }
+        GM_setValue('pulse_dl_history', JSON.stringify(history));
+      } catch (e) {
+        console.warn('[History] Failed to write history:', e.message);
+      }
+    },
+
     mark(items) {
       if (!Settings.get('enableHistory')) return;
 
-      const history = JSON.parse(GM_getValue('pulse_dl_history', '{}'));
+      const history = this._read();
       const today = new Date().toISOString().split('T')[0];
 
       items.forEach(item => {
@@ -557,18 +589,18 @@
         }
       });
 
-      GM_setValue('pulse_dl_history', JSON.stringify(history));
+      this._write(history);
       logDebug(`Marked ${items.length} items as downloaded`);
     },
 
     isDownloaded(itemId) {
       if (!Settings.get('enableHistory')) return false;
-      const history = JSON.parse(GM_getValue('pulse_dl_history', '{}'));
+      const history = this._read();
       return history[itemId] !== undefined;
     },
 
     getDownloadDate(itemId) {
-      const history = JSON.parse(GM_getValue('pulse_dl_history', '{}'));
+      const history = this._read();
       return history[itemId]?.date;
     },
 
@@ -579,7 +611,7 @@
     },
 
     getAll() {
-      return JSON.parse(GM_getValue('pulse_dl_history', '{}'));
+      return this._read();
     },
 
     getStats() {
@@ -610,9 +642,12 @@
     import(jsonString) {
       try {
         const imported = JSON.parse(jsonString);
+        if (!imported || typeof imported !== 'object' || Array.isArray(imported)) {
+          throw new Error('Invalid history file format');
+        }
         const current = this.getAll();
         const merged = { ...current, ...imported };
-        GM_setValue('pulse_dl_history', JSON.stringify(merged));
+        this._write(merged);
         showNotification(`Imported ${Object.keys(imported).length} history entries`, 'success', 3000);
       } catch (error) {
         console.error('[History] Import failed:', error);
@@ -1124,6 +1159,21 @@
       .substring(0, 200); // Limit length to prevent issues
   }
 
+  // Quote a value for safe inclusion in a POSIX shell command (single-quoted).
+  // Prevents $, backtick, etc. in server-supplied URL parts (Container/ETag) or
+  // filenames from being interpreted when the user runs a generated script.
+  function shQuote(s) {
+    return "'" + String(s == null ? '' : s).replace(/'/g, "'\\''") + "'";
+  }
+  // Quote a value for a single-quoted PowerShell string.
+  function psQuote(s) {
+    return "'" + String(s == null ? '' : s).replace(/'/g, "''") + "'";
+  }
+  // Escape a value for a Python double-quoted string literal.
+  function pyQuote(s) {
+    return '"' + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  }
+
   function deduplicateItems(items) {
     const seen = new Set();
     const deduplicated = [];
@@ -1251,9 +1301,12 @@
         res = source.Name.match(/\d+p/)?.[0] || '';
       }
 
+      const audioStream = source.MediaStreams ? source.MediaStreams.find(s => s.Type === 'Audio') : null;
+
       return {
         resolution: res,
-        codec: stream ? (stream.Codec || '').toUpperCase() : (source.Container || '').toUpperCase()
+        codec: stream ? (stream.Codec || '').toUpperCase() : (source.Container || '').toUpperCase(),
+        audioCodec: audioStream ? (audioStream.Codec || '').toUpperCase() : ''
       };
     };
 
@@ -1275,7 +1328,7 @@
     const metadata = {
       series: item.SeriesName || item.SeriesStudioName || '',
       showname: item.SeriesName || item.SeriesStudioName || '',
-      season: item.ParentIndexNumber || 1,
+      season: item.ParentIndexNumber ?? 1, // ?? not || so Season 0 (Specials) stays 0
       episode: item.IndexNumber,
       title: item.Name || item.OriginalTitle || 'Unknown',
       name: item.Name || item.OriginalTitle || 'Unknown',
@@ -1441,10 +1494,35 @@
 
 
   // ---------- JDownloader Integration ----------
+  // JDownloader's FlashGot/Click'n'Load server binds to IPv4 127.0.0.1 only.
+  // On macOS (and some Linux), `localhost` resolves to IPv6 ::1 first, so a
+  // request to http://localhost:9666 never reaches JD and detection fails even
+  // though JD is running. Try 127.0.0.1 first, fall back to localhost, and
+  // remember whichever host actually answered. (Both are in @connect.)
+  const JD_HOSTS = ['127.0.0.1', 'localhost'];
+  let jdWorkingHost = null;
+
+  async function jdFetch(port, path, options) {
+    const ordered = jdWorkingHost
+      ? [jdWorkingHost, ...JD_HOSTS.filter(h => h !== jdWorkingHost)]
+      : JD_HOSTS;
+    let lastError = null;
+    for (const host of ordered) {
+      try {
+        const response = await gmFetch(`http://${host}:${port}${path}`, options);
+        jdWorkingHost = host; // cache the host that responded
+        return response;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('JDownloader not reachable on 127.0.0.1 or localhost');
+  }
+
   async function testJDownloaderConnection(port = null) {
     const testPort = port || Settings.get('jdownloaderPort');
     try {
-      const response = await gmFetch(`http://localhost:${testPort}/flashgot`, {
+      const response = await jdFetch(testPort, '/flashgot', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -1475,21 +1553,21 @@
       if (isConnected) {
         // JDownloader just became available
         logDebug('[JDownloader] Detected! Auto-enabling integration...');
-        Settings.set('enableJDownloader', true);
+        Settings.set('jdownloaderEnabled', true);
         showNotification('JDownloader detected and enabled!', 'success', 3000);
 
         // Update UI if settings panel is open
-        const jdCheckbox = document.getElementById('enable-jdownloader');
+        const jdCheckbox = document.getElementById('jdownloader-enabled');
         if (jdCheckbox) {
           jdCheckbox.checked = true;
         }
       } else {
         // JDownloader disconnected
         logDebug('[JDownloader] Connection lost');
-        Settings.set('enableJDownloader', false);
+        Settings.set('jdownloaderEnabled', false);
 
         // Update UI if settings panel is open
-        const jdCheckbox = document.getElementById('enable-jdownloader');
+        const jdCheckbox = document.getElementById('jdownloader-enabled');
         if (jdCheckbox) {
           jdCheckbox.checked = false;
         }
@@ -1594,7 +1672,7 @@
         source: 'PulseGrab'
       });
 
-      const response = await gmFetch(`http://localhost:${port}/flashgot`, {
+      const response = await jdFetch(port, '/flashgot', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -1694,7 +1772,7 @@ def rename_files(folder_path):
         new_name = filenames[i]
         new_path = os.path.join(folder_path, new_name)
 
-        try {
+        try:
             if os.path.exists(new_path):
                 print(f"[SKIP] Skipped: {new_name} (already exists)")
             else:
@@ -1768,7 +1846,9 @@ REM Rename files
 set INDEX=0
 set RENAMED=0
 
-for %%F in (Download*.mp4 Download*.mkv Download*.avi) do (
+REM Iterate a single name-sorted listing so extensions aren't grouped
+REM (which would break the index->filename mapping for mixed-extension sets).
+for /f "delims=" %%F in ('dir /b /a-d /o:n "Download*.*" 2^>nul') do (
     if exist "%%F" (
         call set "NEWNAME=%%FILE!INDEX!%%"
         if not "!NEWNAME!"=="" (
@@ -1816,6 +1896,7 @@ if [ ! -d "$FOLDER" ]; then
 fi
 
 cd "$FOLDER" || exit 1
+shopt -s nullglob
 
 echo ""
 echo "📁 Scanning: $FOLDER"
@@ -1826,24 +1907,42 @@ FILENAMES=(
 ${downloadInfo.map(info => `    "${info.filename}"`).join('\n')}
 )
 
-# Find and rename files
+# Collect all Download* files and sort by their numeric suffix so the order
+# matches JDownloader's naming (Download.ext=0, Download_2.ext, Download_3.ext...).
+# A plain glob would group by extension and break the index→filename mapping.
+FILES=()
+while IFS= read -r file; do
+    [ -n "$file" ] && FILES+=("$file")
+done < <(
+    for f in Download*.*; do
+        [ -f "$f" ] || continue
+        base="${'${f%.*}'}"
+        if [ "$base" = "Download" ]; then
+            idx=0
+        else
+            idx="${'${base##*_}'}"
+            case "$idx" in (*[!0-9]*) idx=999999;; esac
+        fi
+        printf '%010d\t%s\n' "$idx" "$f"
+    done | sort | cut -f2-
+)
+
+# Rename files
 INDEX=0
 RENAMED=0
 
-for file in Download*.mp4 Download*.mkv Download*.avi Download_*.mp4 Download_*.mkv Download_*.avi; do
-    if [ -f "$file" ]; then
-        if [ $INDEX -lt ${downloadInfo.length} ]; then
-            NEWNAME="${'${FILENAMES[$INDEX]}'}"
-            if [ ! -f "$NEWNAME" ]; then
-                mv "$file" "$NEWNAME"
-                echo "✓ $file → $NEWNAME"
-                ((RENAMED++))
-            else
-                echo "[SKIP] $NEWNAME already exists"
-            fi
+for file in "${'${FILES[@]}'}"; do
+    if [ $INDEX -lt ${downloadInfo.length} ]; then
+        NEWNAME="${'${FILENAMES[$INDEX]}'}"
+        if [ ! -f "$NEWNAME" ]; then
+            mv "$file" "$NEWNAME"
+            echo "✓ $file → $NEWNAME"
+            ((RENAMED++))
+        else
+            echo "[SKIP] $NEWNAME already exists"
         fi
-        ((INDEX++))
     fi
+    ((INDEX++))
 done
 
 echo ""
@@ -1985,13 +2084,14 @@ SUCCESS=0
 `;
 
       downloadInfo.forEach((info, index) => {
-        const url = info.url;
+        const qurl = shQuote(info.url);
+        const qfile = shQuote(info.filename);
         const filename = info.filename.replace(/'/g, "'\\''");
         scriptContent += `echo "[${index + 1}/${downloadInfo.length}] ${filename}"\n`;
         scriptContent += `if [ "$DOWNLOADER" = "wget" ]; then\n`;
-        scriptContent += `  wget -O '${filename}' '${url}'\n`;
+        scriptContent += `  wget -O ${qfile} ${qurl}\n`;
         scriptContent += `else\n`;
-        scriptContent += `  curl -L -o '${filename}' '${url}'\n`;
+        scriptContent += `  curl -L -o ${qfile} ${qurl}\n`;
         scriptContent += `fi\n\n`;
         scriptContent += `if [ $? -eq 0 ]; then\n`;
         scriptContent += `  echo "SUCCESS: ${filename}"\n`;
@@ -3300,24 +3400,10 @@ Note: If blocked, right-click → Open, or run in Terminal:
       }
     }
 
-    // Keyboard shortcuts
-    function handleDMKeydown(e) {
-      if (!document.body.contains(manager)) {
-        document.removeEventListener('keydown', handleDMKeydown);
-        return;
-      }
-      if (e.key === 'Escape') {
-        manager.querySelector('#close-manager')?.click();
-      } else if (e.key === ' ' && e.target === document.body) {
-        e.preventDefault();
-        if (isPaused) {
-          manager.querySelector('#start-all')?.click();
-        } else {
-          manager.querySelector('#pause-all')?.click();
-        }
-      }
-    }
-    document.addEventListener('keydown', handleDMKeydown);
+    // Keyboard shortcuts are handled by `keyboardHandler` below (registered once
+    // and removed in the overlay.remove() override). A second document-level
+    // handler here previously double-fired Escape/Space and leaked because it
+    // only detached on the next keypress after the manager was gone.
 
     function renderQueue(needsHandlerSetup = false) {
       // Only set up handlers when queue structure changes (items added/removed)
@@ -3829,7 +3915,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
           break;
 
         case 'dismiss':
+          // Removing an item reindexes the queue; in-flight downloads are keyed
+          // by their old array index, so block removal while anything is active.
+          if (activeDownloads.size > 0) {
+            showNotification('Pause downloads before removing items', 'warning', 2500);
+            break;
+          }
           downloadQueue.splice(index, 1);
+          userAbortedIndices.clear(); // indices shifted; rebuilt as needed on next pause
           renderQueue(true);
           updateStats();
           saveState();
@@ -4172,6 +4265,19 @@ Note: If blocked, right-click → Open, or run in Terminal:
       }
     }
 
+    // Abort every in-flight download and clear the index-keyed bookkeeping.
+    // activeDownloads is keyed by array index and the running downloadItem()
+    // closures captured their index, so this must run before any structural
+    // queue mutation (splice/filter/rebuild) to avoid writing progress to the
+    // wrong rows after indices shift.
+    function abortAllActive() {
+      for (const [, download] of activeDownloads.entries()) {
+        try { download.abortController.abort(); } catch (e) {}
+      }
+      activeDownloads.clear();
+      userAbortedIndices.clear();
+    }
+
     // Button handlers
     manager.querySelector('#start-all').addEventListener('click', () => {
       const hasSelection = downloadQueue.some(i => i.selected && i.status !== 'completed');
@@ -4210,9 +4316,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
     });
 
     manager.querySelector('#clear-completed').addEventListener('click', () => {
+      if (activeDownloads.size > 0) {
+        showNotification('Pause downloads before clearing the queue', 'warning', 2500);
+        return;
+      }
       const remaining = downloadQueue.filter(item => item.status !== 'completed');
       downloadQueue.length = 0;
       downloadQueue.push(...remaining);
+      userAbortedIndices.clear(); // indices shifted
       saveState();
       renderQueue(true); // Queue structure changed
     });
@@ -4280,11 +4391,12 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
       console.log(`[DownloadManager] Cancelling ${incompleteCount} incomplete items`);
 
-      // Stop current download if any
-      if (currentAbortController) {
-        currentAbortController.abort();
-        currentAbortController = null;
-      }
+      // Abort every active download. Concurrent downloads store their
+      // controller in activeDownloads (not currentAbortController, which stays
+      // null in concurrent mode), so iterate the map like pause-all does —
+      // otherwise the fetches keep streaming in the background.
+      abortAllActive();
+      currentAbortController = null;
 
       isPaused = true;
       window.bypassModalShown = false; // Reset flag when cancelled
@@ -4317,8 +4429,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
       const selected = downloadQueue.filter(i => i.selected);
       if (selected.length === 0) return;
 
+      if (activeDownloads.size > 0) {
+        showNotification('Pause downloads before removing items', 'warning', 2500);
+        return;
+      }
       if (confirm(`Remove ${selected.length} selected item(s) from the queue?`)) {
         downloadQueue = downloadQueue.filter(i => !i.selected);
+        userAbortedIndices.clear(); // indices shifted
         renderQueue(true); // Queue structure changed
         updateStats();
         saveState();
@@ -4551,9 +4668,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       if (isDownloading) {
         if (confirm('Downloads are in progress. Close anyway? Progress will be saved and you can resume later.')) {
           isPaused = true;
-          if (currentAbortController) {
-            currentAbortController.abort();
-          }
+          abortAllActive();
           saveState();
           overlay.remove();
         }
@@ -4567,9 +4682,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         if (isDownloading) {
           if (confirm('Downloads are in progress. Close anyway? Progress will be saved and you can resume later.')) {
             isPaused = true;
-            if (currentAbortController) {
-              currentAbortController.abort();
-            }
+            abortAllActive();
             saveState();
             overlay.remove();
           }
@@ -4748,8 +4861,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
           // Remove selected items
           const selected = downloadQueue.filter(i => i.selected);
           if (selected.length > 0) {
+            if (activeDownloads.size > 0) {
+              showNotification('Pause downloads before removing items', 'warning', 2500);
+              break;
+            }
             if (confirm(`Remove ${selected.length} selected item(s) ? `)) {
               downloadQueue = downloadQueue.filter(i => !i.selected);
+              userAbortedIndices.clear(); // indices shifted
               renderQueue(true); // Queue structure changed
               updateStats();
               saveState();
@@ -4988,7 +5106,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
       // Add progress indicator
       if (progress !== null) {
-        button.style.background = `linear-gradient(to right, ${theme.primary} ${progress} %, ${theme.primaryDisabled} ${progress} %)`;
+        button.style.background = `linear-gradient(to right, ${theme.primary} ${progress}%, ${theme.primaryDisabled} ${progress}%)`;
       }
     } else {
       button.style.backgroundColor = theme.primary;
@@ -5158,24 +5276,18 @@ Note: If blocked, right-click → Open, or run in Terminal:
           to { opacity: 1; }
       }
       @keyframes shimmer {
-        0% { background- position: 200% 0;
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
       }
-      100% { background- position: -200% 0;
-    }
-  }
-  /* Button hover effects */
-  button: not(: disabled):hover {
-    opacity: 0.85!important;
-    transform: translateY(-1px);
-    transition: all 0.2s ease;
-  }
-  button: not(: disabled):active {
-    transform: translateY(0);
-  }
-        /* Smooth scrolling */
-        * {
-    scroll- behavior: smooth;
-}
+      /* Button hover effects — scoped to this modal so they don't restyle the host app's buttons */
+      #${CONFIG.progressId} button:not(:disabled):hover {
+        opacity: 0.85 !important;
+        transform: translateY(-1px);
+        transition: all 0.2s ease;
+      }
+      #${CONFIG.progressId} button:not(:disabled):active {
+        transform: translateY(0);
+      }
   `;
       document.head.appendChild(style);
     }
@@ -5207,7 +5319,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     if (progressFill && total > 0) {
       const percentage = Math.round((current / total) * 100);
-      progressFill.style.width = `${percentage}% `;
+      progressFill.style.width = `${percentage}%`;
     }
 
     if (statusText) {
@@ -5224,18 +5336,10 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     if (errorList && errors.length > 0) {
       errorList.innerHTML = errors.map(error => `
-  < div style = "
-color: #dc2626;
-font: 12px system-ui, sans-serif;
-padding: 4px 8px;
-background: #fef2f2;
-border-left: 3px solid #dc2626;
-margin: 2px 0;
-border-radius: 4px;
-">
+        <div style="color:#dc2626;font:12px system-ui,sans-serif;padding:4px 8px;background:#fef2f2;border-left:3px solid #dc2626;margin:2px 0;border-radius:4px;">
           ${Icons.alert} ${error}
-        </div >
-  `).join('');
+        </div>
+      `).join('');
     }
   }
 
@@ -6087,11 +6191,15 @@ animation: fadeIn 0.3s ease;
       btn.addEventListener('click', (e) => {
         const quality = e.target.getAttribute('data-quality');
 
-        // Update active state
+        // Update active state. Use the actual dark-mode setting — the old code
+        // compared the panel background to 'rgb(42,42,42)', but the panel is
+        // #1c1c1c (rgb(28,28,28)), so dark mode never matched and deselected
+        // presets were reset to white-on-dark (invisible).
+        const presetDark = Settings.get('darkMode');
         qualityPresets.forEach(b => {
           b.classList.remove('active');
-          b.style.background = getComputedStyle(panel).getPropertyValue('background-color') === 'rgb(42, 42, 42)' ? '#2a2a2a' : 'white';
-          b.style.color = getComputedStyle(panel).getPropertyValue('background-color') === 'rgb(42, 42, 42)' ? '#e0e0e0' : '#1f2937';
+          b.style.background = presetDark ? '#2a2a2a' : 'white';
+          b.style.color = presetDark ? '#e0e0e0' : '#1f2937';
         });
 
         e.target.classList.add('active');
@@ -6266,7 +6374,7 @@ animation: fadeIn 0.3s ease;
           const skipDownloaded = settingsPanel.querySelector('#skip-downloaded').checked;
           const enableRateLimit = settingsPanel.querySelector('#enable-rate-limit').checked;
           const debugMode = settingsPanel.querySelector('#debug-mode').checked;
-          const concurrentDownloads = parseInt(settingsPanel.querySelector('#concurrent-downloads').value) || 2;
+          const concurrentDownloads = parseInt(settingsPanel.querySelector('#concurrent-downloads').value) || 3;
 
           // NEW v6.55: Enhanced filter options
           const filterQuality = settingsPanel.querySelector('.quality-preset.active')?.getAttribute('data-quality') || null;
@@ -6978,6 +7086,9 @@ animation: fadeIn 0.3s ease;
 
     const notification = document.createElement('div');
     notification.className = 'pulse-dl-notification';
+    // Announce to screen readers; errors/warnings are assertive, the rest polite.
+    notification.setAttribute('role', 'status');
+    notification.setAttribute('aria-live', (type === 'error' || type === 'warning') ? 'assertive' : 'polite');
 
     const colors = {
       success: getTheme().primary,
@@ -7016,6 +7127,7 @@ animation: fadeIn 0.3s ease;
                         `;
 
     notification.innerHTML = `${icons[type] || icons.info} ${message}`;
+    notification.title = 'Click to dismiss';
     document.body.appendChild(notification);
 
     requestAnimationFrame(() => {
@@ -7023,11 +7135,19 @@ animation: fadeIn 0.3s ease;
       notification.style.opacity = '1';
     });
 
-    setTimeout(() => {
+    let dismissTimer = null;
+    const dismiss = () => {
+      if (!notification.isConnected) return;
+      clearTimeout(dismissTimer);
       notification.style.transform = 'translateX(100%)';
       notification.style.opacity = '0';
       setTimeout(() => notification.remove(), 300);
-    }, duration);
+    };
+
+    // The element has cursor:pointer but previously did nothing on click.
+    notification.addEventListener('click', dismiss);
+
+    dismissTimer = setTimeout(dismiss, duration);
   }
 
   function showConfirmDialog(title, details, items, onConfirm, onCancel) {
@@ -7446,9 +7566,7 @@ animation: fadeIn 0.3s ease;
       lines.push(...items.filter(item => item && item.Id).map(item => {
         const url = getFullBypassUrl(item, server, token);
         const downloadInfo = buildDownloadInfo(item, server, token);
-        // Properly escape paths with single quotes
-        const escapedPath = downloadInfo.fullPath.replace(/'/g, "'\\''");
-        return `wget -O '${escapedPath}' "${url}"`;
+        return `wget -O ${shQuote(downloadInfo.fullPath)} ${shQuote(url)}`;
       }));
       return lines.join('\n');
     },
@@ -7536,9 +7654,8 @@ animation: fadeIn 0.3s ease;
       items.filter(item => item && item.Id).forEach((item, index) => {
         const url = getFullBypassUrl(item, server, token);
         const downloadInfo = buildDownloadInfo(item, server, token);
-        const escapedPath = downloadInfo.fullPath.replace(/'/g, "''");
         lines.push(`Write-Progress -Activity "Downloading" -Status "${index + 1}/${items.length}" -PercentComplete ${Math.round(((index + 1) / items.length) * 100)}`);
-        lines.push(`Download-PulseGrabItem -Url "${url}" -OutFile '${escapedPath}'`);
+        lines.push(`Download-PulseGrabItem -Url ${psQuote(url)} -OutFile ${psQuote(downloadInfo.fullPath)}`);
         lines.push('');
       });
 
@@ -7593,8 +7710,7 @@ animation: fadeIn 0.3s ease;
       items.filter(item => item && item.Id).forEach(item => {
         const url = getFullBypassUrl(item, server, token);
         const downloadInfo = buildDownloadInfo(item, server, token);
-        const escapedPath = downloadInfo.fullPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        lines.push(`        ("${url}", "${escapedPath}"),`);
+        lines.push(`        (${pyQuote(url)}, ${pyQuote(downloadInfo.fullPath)}),`);
       });
 
       lines.push('    ]');
@@ -7650,8 +7766,7 @@ animation: fadeIn 0.3s ease;
       items.filter(item => item && item.Id).forEach(item => {
         const url = getFullBypassUrl(item, server, token);
         const downloadInfo = buildDownloadInfo(item, server, token);
-        const escapedPath = downloadInfo.fullPath.replace(/'/g, "'\\''");
-        lines.push(`download_file "${url}" '${escapedPath}'`);
+        lines.push(`download_file ${shQuote(url)} ${shQuote(downloadInfo.fullPath)}`);
       });
 
       lines.push('');
@@ -8134,15 +8249,36 @@ animation: fadeIn 0.3s ease;
   }
 
   // --- Emby auth ---
+  // Best-effort UserId resolution. On app.emby.media / Emby Connect remote
+  // sessions getCurrentUserId() and _serverInfo.UserId are often absent, which
+  // forces the unscoped /Items/{id} endpoint that 404s for non-admin users.
+  // Fall back to other ApiClient fields and stored credentials.
+  function resolveEmbyUserId(apiClient) {
+    try {
+      if (typeof apiClient.getCurrentUserId === 'function') {
+        const uid = apiClient.getCurrentUserId();
+        if (uid) return uid;
+      }
+    } catch (e) {}
+    if (apiClient._serverInfo && apiClient._serverInfo.UserId) return apiClient._serverInfo.UserId;
+    if (apiClient._currentUser && apiClient._currentUser.Id) return apiClient._currentUser.Id;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && /servercredentials/i.test(k)) {
+          const creds = JSON.parse(localStorage.getItem(k));
+          const srv = creds?.Servers?.find(s => s.UserId) || creds?.Servers?.[0];
+          if (srv?.UserId) return srv.UserId;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function getServerAndTokenEmby() {
     const apiClient = getApiClient();
     if (!apiClient) return { server: null, token: null, userId: null };
-    let userId = null;
-    if (typeof apiClient.getCurrentUserId === 'function') {
-      userId = apiClient.getCurrentUserId();
-    } else if (apiClient._serverInfo && apiClient._serverInfo.UserId) {
-      userId = apiClient._serverInfo.UserId;
-    }
+    const userId = resolveEmbyUserId(apiClient);
     return {
       server: normalizeServerAddress(apiClient.serverAddress()),
       token: apiClient.accessToken(),
@@ -8404,12 +8540,14 @@ animation: fadeIn 0.3s ease;
       if (!backs.length) return null;
 
       const styleAttr = backs[backs.length - 1].getAttribute('style') || '';
-      const showMatch = styleAttr.match(/Items\/(\d+)\/Images\/Backdrop/i);
+      // IDs may be numeric (Emby) or 32-char hex GUIDs (Jellyfin / many Emby
+      // setups), so don't restrict to \d+.
+      const showMatch = styleAttr.match(/Items\/([0-9a-f]+)\/Images\/Backdrop/i);
       if (!showMatch) return null;
 
       const showId = showMatch[1];
       const path = (history?.state?.path) || window.location.hash || '';
-      const seasonMatch = path.match(/\/(?:item|details)\?id=(\d+)(?:&|$)/i);
+      const seasonMatch = path.match(/[?&]id=([^&#]+)/i);
       const seasonIdFromPath = seasonMatch ? seasonMatch[1] : showId;
 
       return { showId, seasonIdFromPath };
@@ -8468,8 +8606,10 @@ animation: fadeIn 0.3s ease;
         return keyMatch ? keyMatch[1] : null;
       }
 
-      // Emby & Jellyfin: id= parameter
-      const idMatch = combined.match(/id=([^&#]+)/i);
+      // Emby & Jellyfin: id= parameter.
+      // Anchor on a query/fragment boundary so we don't accidentally match the
+      // "id=" inside serverId=, parentId=, seriesId=, etc.
+      const idMatch = combined.match(/(?:^|[?&#])id=([^&#]+)/i);
       return idMatch ? idMatch[1] : null;
     } catch (error) {
       console.error('[PulseGrab] Error getting item ID from URL:', error);
@@ -8584,7 +8724,7 @@ animation: fadeIn 0.3s ease;
         return match[1];
       }
 
-      match = combined.match(/id=([^&#]+)/i);
+      match = combined.match(/(?:^|[?&#])id=([^&#]+)/i);
       if (match) {
         console.log(`[Debug] Found general id: ${match[1]}`);
         return match[1];
@@ -8767,6 +8907,7 @@ animation: fadeIn 0.3s ease;
     const allItems = [];
     let startIndex = 0;
     let totalRecordCount = 0;
+    let gotFullBatch = false;
 
     do {
       if (abortController?.signal.aborted) {
@@ -8783,6 +8924,7 @@ animation: fadeIn 0.3s ease;
 
       allItems.push(...items);
       totalRecordCount = data.TotalRecordCount || items.length;
+      gotFullBatch = items.length === CONFIG.batchSize;
       startIndex += items.length; // Use actual items length, not CONFIG.batchSize
 
       if (onProgress) {
@@ -8801,7 +8943,7 @@ animation: fadeIn 0.3s ease;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-    } while (startIndex < totalRecordCount);
+    } while (startIndex < totalRecordCount || gotFullBatch);
 
     return allItems;
   }
@@ -8848,6 +8990,10 @@ animation: fadeIn 0.3s ease;
     const allItems = [];
     let startIndex = 0;
     let totalRecordCount = 0;
+    // Some Emby/Jellyfin endpoints omit TotalRecordCount (notably the Items
+    // fallback). Relying on it alone would stop after the first page, silently
+    // truncating large folders. Keep paging while the server returns full pages.
+    let gotFullBatch = false;
 
     do {
       if (abortController?.signal.aborted) {
@@ -8864,6 +9010,7 @@ animation: fadeIn 0.3s ease;
 
       allItems.push(...items);
       totalRecordCount = data.TotalRecordCount || 0;
+      gotFullBatch = items.length === CONFIG.batchSize;
       startIndex += items.length; // Use actual items length, not CONFIG.batchSize
 
       if (onProgress) {
@@ -8884,7 +9031,7 @@ animation: fadeIn 0.3s ease;
         await new Promise(resolve => setTimeout(resolve, 100)); // Small delay to avoid freezing
       }
 
-    } while (startIndex < totalRecordCount);
+    } while (startIndex < totalRecordCount || gotFullBatch);
 
     if (!options.silent) {
       updateProgress(allItems.length, totalRecordCount, `Folder scan complete`);
@@ -10763,6 +10910,41 @@ animation: fadeIn 0.3s ease;
     }
   }
 
+  // Returns true only when this page is actually an Emby / Plex / Jellyfin
+  // web client. The @match patterns include a broad "*://*/web/*" rule (needed
+  // to catch self-hosted Jellyfin/Emby on arbitrary domains), which would
+  // otherwise make the script inject its floating button onto unrelated sites
+  // whose path merely contains "/web/". This guard prevents that: a plain
+  // "/web/" URL is NOT enough — we require a real media-server signal.
+  function isMediaServerContext() {
+    const win = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+    const url = window.location.href;
+    const host = window.location.hostname;
+
+    // Hosted clients — unambiguous from the URL alone.
+    if (host === 'app.plex.tv') return true;
+    if (/:32400\/web/.test(url)) return true;
+    if (host === 'app.emby.media') return true;
+    if (url.includes('/emby/')) return true;
+
+    // Self-hosted Emby / Jellyfin: require a live ApiClient / ServerConnections
+    // object or stored credentials, NOT just a "/web/" path.
+    try { if (win.ServerConnections) return true; } catch (e) {}
+    try { if (win.ApiClient && typeof win.ApiClient.serverAddress === 'function') return true; } catch (e) {}
+    try { if (localStorage.getItem('jellyfin_credentials')) return true; } catch (e) {}
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && /servercredentials/i.test(k)) return true;
+      }
+    } catch (e) {}
+
+    return false;
+  }
+
+  let _initAttempts = 0;
+  const _MAX_INIT_ATTEMPTS = 10;
+
   function initialize() {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', initialize);
@@ -10770,6 +10952,19 @@ animation: fadeIn 0.3s ease;
     }
 
     setTimeout(() => {
+      // Don't inject anything unless we're really on a media-server page.
+      // ApiClient can load asynchronously on self-hosted instances, so retry
+      // a bounded number of times before giving up silently.
+      if (!isMediaServerContext()) {
+        if (++_initAttempts <= _MAX_INIT_ATTEMPTS) {
+          setTimeout(initialize, 1000);
+        } else {
+          logDebug('[PulseGrab] No Emby/Plex/Jellyfin server detected here; not injecting.');
+        }
+        return;
+      }
+      _initAttempts = 0;
+
       applyDarkMode();
       createButton();
       setupKeyboardShortcuts();
@@ -10877,6 +11072,9 @@ animation: fadeIn 0.3s ease;
       hideProgressModal();
     }
     stopJDownloaderDetection(); // Stop auto-detection when cleaning up
+    // Reset the bypass-modal guard so a stale `true` from a prior page doesn't
+    // suppress the modal forever after SPA navigation.
+    window.bypassModalShown = false;
     document.querySelectorAll('.pulse-dl-notification').forEach(n => n.remove());
     document.querySelectorAll('[style*="2147483649"]').forEach(n => n.remove());
     const settingsBtn = document.getElementById(CONFIG.settingsId);
