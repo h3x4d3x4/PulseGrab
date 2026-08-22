@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.0.10
-// @description  Download anything from your Emby, Plex, or Jellyfin server — built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
+// @version      1.3.0
+// @description  Download anything from your Emby, Plex, or Jellyfin server — server-to-server transfer to your own NAS, built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
 // @homepageURL  https://hexadexa.io
@@ -11,9 +11,12 @@
 // @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js
 // @icon         https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/assets/pulsegrab_logo.png
 // @connect      api.github.com
+// @connect      api.jdownloader.org
 // @connect      localhost
 // @connect      127.0.0.1
+// @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js
+// @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js
 // @match        https://*/emby/*
 // @match        https://app.emby.media/*
 // @match        https://app.plex.tv/*
@@ -219,6 +222,17 @@
       timeout: 10000, // 10 seconds for more reliable detection
       batchSize: 500  // Send in chunks to avoid overwhelming JD
     },
+    // NEW v1.1.0: Server-to-server transfer via an aria2 daemon on the destination box
+    remote: {
+      defaultPort: 6800,
+      timeout: 15000,
+      batchSize: 100,        // addUri calls per system.multicall request
+      pollInterval: 2000,    // transfer panel refresh
+      preflightTimeout: 12000, // how long to wait for the probe item to prove reachability
+      // Downloads land here first so the media server never indexes a partial file.
+      // Leading dot => Emby/Jellyfin/Plex skip it during library scans.
+      stagingDir: '.pulsegrab-incoming'
+    },
     rateLimit: {
       maxRequestsPerSecond: 10,
       enabled: true
@@ -259,8 +273,29 @@
       compactMode: false,
       showResultsDialog: true,
       jdownloaderEnabled: false,
+      jdownloaderHost: '',   // NEW v1.1.0: blank = local (127.0.0.1 / localhost)
       jdownloaderPort: 9666,
       enableJDownloaderAutoDetect: false,
+      // NEW v1.1.0: "Send to My Server".
+      // 'myjd'  — MyJDownloader cloud relay: no ports, no server-side config.
+      // 'aria2' — direct JSON-RPC to an aria2 daemon on the destination.
+      remoteMethod: 'myjd',
+      // MyJDownloader. The password is never stored: /my/connect only needs the
+      // two SHA-256 secrets derived from it, so we keep those instead.
+      myjdEmail: '',
+      myjdLoginSecret: '',
+      myjdDeviceSecret: '',
+      myjdDeviceId: '',
+      myjdDeviceName: '',
+      myjdDestination: '',
+      // aria2. A non-empty remoteHost is its enabled flag; no separate toggle.
+      remoteHost: '',
+      remotePort: 6800,
+      remoteSecret: '',
+      remoteSecure: false,        // https:// instead of http:// for the RPC endpoint
+      remoteLibraryDir: '/downloads', // path *inside the aria2 container* that maps to the library root
+      remoteMaxConnections: 1,    // connections per source server — 1 is polite and avoids rate limits
+      remoteAutoStartPanel: true, // show the live transfer panel after queueing
       skipDownloaded: false,
       enableHistory: true,
       debugMode: false,
@@ -283,6 +318,36 @@
       // NEW v6.58: Custom Filename Templates
       filenameTemplateEpisode: '{Series} - S{season}E{episode} - {Title}',
       filenameTemplateMovie: '{Title} ({Year})',
+      // NEW v1.1.0: Top-level library folder names. Defaults match the usual
+      // Emby/Jellyfin/Plex layout, but plenty of libraries are named in another
+      // language ("Filmes"/"Series") — writing to "Movies"/"TV Shows" there just
+      // creates folders the media server never scans.
+      libraryFolderMovies: 'Movies',
+      // true  = Movies/Dune (2021)/Dune (2021).mkv   (one folder per film)
+      // false = Movies/Dune (2021).mkv               (loose in the library root)
+      movieFolderPerFilm: true,
+      libraryFolderShows: 'TV Shows',
+      libraryFolderMusic: 'Music',
+      // Additional top-level folders offered in the destination picker, for
+      // libraries that don't map onto just movies/shows/music.
+      libraryFoldersExtra: '',
+      // Remembers where each series/artist was last sent, so repeat sends of the
+      // same show don't ask again. JSON map of key -> folder.
+      destinationMemory: '{}',
+      // Folders pinned to the front of every picker, comma separated.
+      pinnedFolders: '',
+      // One rule per line, "text I match on => folder". First match wins.
+      destinationRules: '',
+      // NEW v1.1.0: your OWN media server, used to discover real library names
+      // and browse folders. Optional — everything still works by typing.
+      destServerUrl: '',
+      destApiKey: '',
+      destServerType: '',
+      destMediaRoot: '',          // blank = auto-detected from library locations
+      destLibrariesCache: '',     // JSON snapshot so the picker works offline
+      recentDestinations: '',     // comma-separated, most recent first
+      // Ask which folder to use on every send. Off = use the saved defaults.
+      remoteAskDestination: true,
       // NEW v6.59: Subtitle Settings
       dlExternalSubtitles: true,
       subtitleLanguages: '', // Empty = all, or comma separated 'eng,spa'
@@ -1003,6 +1068,13 @@
       <line x1="12" y1="15" x2="12" y2="3"/>
     </svg>`,
 
+    server: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="2" width="20" height="8" rx="2"/>
+      <rect x="2" y="14" width="20" height="8" rx="2"/>
+      <line x1="6" y1="6" x2="6.01" y2="6"/>
+      <line x1="6" y1="18" x2="6.01" y2="18"/>
+    </svg>`,
+
     settings: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -1133,8 +1205,31 @@
             json: () => { try { return Promise.resolve(JSON.parse(response.responseText)); } catch (e) { return Promise.reject(new Error(`Invalid JSON: ${response.responseText.substring(0, 200)}`)); } }
           });
         },
-        onerror: (error) => reject(new Error('Network error')),
-        ontimeout: () => reject(new Error('Timeout'))
+        // Keep whatever the userscript manager actually said. A bare
+        // "Network error" hides the difference between "the manager refused to
+        // connect", "nothing is listening" and "TLS failed", which are three
+        // completely different fixes.
+        onerror: (response) => {
+          const detail = response && (response.error || response.statusText || response.details);
+          const status = response && response.status;
+          const parts = [];
+          if (detail) parts.push(String(detail));
+          if (status) parts.push(`status ${status}`);
+
+          let message = parts.length ? parts.join(', ') : 'network error';
+          if (/refused|not permitted|not whitelisted|blocked/i.test(message)) {
+            message += ' — your userscript manager blocked this host. Reinstall the script, '
+              + 'and choose "Always allow all domains" when it asks.';
+          } else if (!parts.length) {
+            message = 'no response — nothing listening on that address/port, the host is unreachable '
+              + 'from this browser, or your userscript manager blocked it';
+          }
+          const error = new Error(message);
+          error.gmResponse = response;
+          console.warn('[PulseGrab] request failed:', url, response);
+          reject(error);
+        },
+        ontimeout: () => reject(new Error(`timed out after ${(options.signal && options.signal.timeout) || 2000}ms`))
       });
     });
   }
@@ -1143,6 +1238,17 @@
     if (Settings.get('debugMode')) {
       console.log('[PulseGrab]', ...args);
     }
+  }
+
+  // Media titles routinely contain &, <, and quotes — escape before interpolating
+  // them into any innerHTML template.
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function sanitizeFilename(name) {
@@ -1380,20 +1486,32 @@
       else filename += '.mp4';
     }
 
-    // Build folder structure
+    // Build folder structure. The top-level names are configurable so files can
+    // land inside libraries that aren't named in English — see Settings →
+    // Naming Templates.
+    const libraryFolder = (key, fallback) =>
+      sanitizeFilename((Settings.get(key) || fallback).trim() || fallback);
+
     let folderPath = '';
     if (item.Type === 'Episode') {
       const seriesName = sanitizeFilename(metadata.series || 'Unknown Series');
       const seasonName = sanitizeFilename(item.SeasonName || `Season ${metadata.season}`);
-      folderPath = `TV Shows/${seriesName}/${seasonName}`;
+      folderPath = `${libraryFolder('libraryFolderShows', 'TV Shows')}/${seriesName}/${seasonName}`;
     } else if (item.Type === 'Movie') {
-      const movieName = sanitizeFilename(metadata.title);
-      const year = metadata.year ? ` (${metadata.year})` : '';
-      folderPath = `Movies/${movieName}${year}`;
+      const moviesRoot = libraryFolder('libraryFolderMovies', 'Movies');
+      if (Settings.get('movieFolderPerFilm') === false) {
+        // Some libraries keep films loose in the library root rather than one
+        // folder each. Matching the existing layout keeps the library tidy.
+        folderPath = moviesRoot;
+      } else {
+        const movieName = sanitizeFilename(metadata.title);
+        const year = metadata.year ? ` (${metadata.year})` : '';
+        folderPath = `${moviesRoot}/${movieName}${year}`;
+      }
     } else if (item.Type === 'Audio') {
       const artist = sanitizeFilename(item.AlbumArtist || item.Artists?.[0] || 'Unknown Artist');
       const album = sanitizeFilename(item.Album || 'Unknown Album');
-      folderPath = `Music/${artist}/${album}`;
+      folderPath = `${libraryFolder('libraryFolderMusic', 'Music')}/${artist}/${album}`;
       if (item.IndexNumber) {
         filename = `${String(item.IndexNumber).padStart(2, '0')} - ${filename}`;
       }
@@ -1499,13 +1617,25 @@
   // request to http://localhost:9666 never reaches JD and detection fails even
   // though JD is running. Try 127.0.0.1 first, fall back to localhost, and
   // remember whichever host actually answered. (Both are in @connect.)
-  const JD_HOSTS = ['127.0.0.1', 'localhost'];
+  //
+  // NEW v1.1.0: a custom host may be set (jdownloaderHost) to reach a JDownloader
+  // running on another machine — e.g. the JDownloader2 app on a NAS. Note that JD
+  // binds the FlashGot/CnL listener to loopback by default: the remote instance
+  // needs `Advanced Settings → RemoteAPI: ExternInterfaceLocalhostOnly` set to
+  // false (and a restart) before it will answer from anywhere but itself.
+  const JD_LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
   let jdWorkingHost = null;
 
+  function jdHosts() {
+    const custom = normalizeNetworkHost(Settings.get('jdownloaderHost'));
+    return custom ? [custom] : JD_LOCAL_HOSTS;
+  }
+
   async function jdFetch(port, path, options) {
-    const ordered = jdWorkingHost
-      ? [jdWorkingHost, ...JD_HOSTS.filter(h => h !== jdWorkingHost)]
-      : JD_HOSTS;
+    const hosts = jdHosts();
+    const ordered = jdWorkingHost && hosts.includes(jdWorkingHost)
+      ? [jdWorkingHost, ...hosts.filter(h => h !== jdWorkingHost)]
+      : hosts;
     let lastError = null;
     for (const host of ordered) {
       try {
@@ -1516,7 +1646,7 @@
         lastError = error;
       }
     }
-    throw lastError || new Error('JDownloader not reachable on 127.0.0.1 or localhost');
+    throw lastError || new Error(`JDownloader not reachable on ${ordered.join(' or ')}`);
   }
 
   async function testJDownloaderConnection(port = null) {
@@ -1696,6 +1826,3845 @@
       console.error('Failed to send links to JDownloader:', error);
       throw new Error(`Failed to send links to JDownloader: ${error.message}`);
     }
+  }
+
+  // ---------- Send to My Server (aria2 JSON-RPC, server-to-server) ----------
+  // The browser never touches the bytes here. It hands the URL list to an aria2
+  // daemon running on the *destination* box, which pulls the files itself. This
+  // works because every download URL PulseGrab builds carries its auth in the
+  // query string (api_key= / X-Plex-Token=), so it is self-contained — see
+  // buildDownloadUrl(). No headers, no cookies, no session to forward.
+
+  // Accepts anything a user might paste — "truenas.local", "192.168.1.50:6800",
+  // "http://nas/", "[fd00::1]" — and returns just the host, URL-ready.
+  // Splitting on the first ':' would mangle IPv6 into garbage, so literals are
+  // detected and kept bracketed.
+  function normalizeNetworkHost(value) {
+    const raw = String(value || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    if (!raw) return '';
+
+    const bracketed = raw.match(/^\[[^\]]+\]/);
+    if (bracketed) return bracketed[0];
+
+    // More than one colon means a bare IPv6 literal, not host:port.
+    if ((raw.match(/:/g) || []).length > 1) return `[${raw}]`;
+
+    return raw.replace(/:.*$/, '');
+  }
+
+  function remoteHost() {
+    return normalizeNetworkHost(Settings.get('remoteHost'));
+  }
+
+  function remoteEndpoint(schemeOverride) {
+    const port = Settings.get('remotePort') || CONFIG.remote.defaultPort;
+    const scheme = schemeOverride || (Settings.get('remoteSecure') ? 'https' : 'http');
+    return `${scheme}://${remoteHost()}:${port}/jsonrpc`;
+  }
+
+  // aria2 wants the shared secret as the first positional param of every aria2.*
+  // method — including each *inner* call of a system.multicall. The multicall
+  // wrapper itself must NOT carry one: aria2 answers HTTP 400 if it does.
+  function remoteParams(params) {
+    const secret = Settings.get('remoteSecret') || '';
+    return secret ? [`token:${secret}`, ...params] : params.slice();
+  }
+
+  function isSystemMethod(method) {
+    return method.startsWith('system.');
+  }
+
+  let remoteRpcId = 0;
+
+  async function aria2Call(method, params = [], timeout = CONFIG.remote.timeout) {
+    if (!remoteHost()) {
+      throw new Error('No server address set. Open Settings → My Server.');
+    }
+
+    let response;
+    try {
+      response = await gmFetch(remoteEndpoint(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: `pulsegrab-${++remoteRpcId}`,
+          method,
+          // system.* takes its auth from the inner calls, never the wrapper.
+          params: isSystemMethod(method) ? params : remoteParams(params)
+        }),
+        signal: { timeout }
+      });
+    } catch (error) {
+      throw new Error(
+        `Could not reach aria2 at ${remoteEndpoint()} (${error.message}). `
+        + 'Check the address, the port, that the container is running — and that your userscript manager '
+        + "wasn't denied permission for this host (it asks once; a denial is remembered, and reinstalling the script clears it)."
+      );
+    }
+
+    const body = await response.text();
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch (e) {
+      throw new Error(`aria2 returned a non-JSON reply (HTTP ${response.status}). Is something other than aria2 listening on that port?`);
+    }
+
+    if (parsed.error) {
+      const message = parsed.error.message || 'Unknown aria2 error';
+      if (/unauthorized/i.test(message)) {
+        throw new Error('aria2 rejected the secret token. Check RPC Secret in Settings → My Server.');
+      }
+      throw new Error(`aria2: ${message}`);
+    }
+
+    if (!response.ok) {
+      throw new Error(`aria2 replied HTTP ${response.status} without an error body.`);
+    }
+
+    return parsed.result;
+  }
+
+  // Batch many addUri calls into one round-trip. Returns the GID array in order.
+  // system.multicall never fails as a whole — individual entries come back as
+  // {faultCode, faultString} instead of [gid], so unpack defensively.
+  async function aria2AddBatch(tasks) {
+    const calls = tasks.map(task => ({
+      methodName: 'aria2.addUri',
+      params: remoteParams([[task.url], task.options])
+    }));
+
+    const results = await aria2Call('system.multicall', [calls], CONFIG.remote.timeout * 2);
+
+    return results.map((entry, index) => {
+      // Success arrives as a single-element array containing the GID.
+      if (Array.isArray(entry) && typeof entry[0] === 'string') {
+        return { gid: entry[0], task: tasks[index] };
+      }
+      const fault = (entry && (entry.faultString || entry.message)) || 'rejected by aria2';
+      return { gid: null, task: tasks[index], error: fault };
+    });
+  }
+
+  function remoteStagingRoot() {
+    const library = (Settings.get('remoteLibraryDir') || '/downloads').replace(/\/+$/, '');
+    return `${library}/${CONFIG.remote.stagingDir}`;
+  }
+
+  // Map one item onto aria2 tasks. buildDownloadInfo() already produces an
+  // Emby-shaped layout (TV Shows/<Series>/<Season>/…, Movies/<Title (Year)>/…),
+  // so `out` carries the folder structure and aria2 creates the directories.
+  //
+  // Returns an array: the media file plus any external subtitles, which land
+  // beside the video exactly like the built-in manager places them. Skipping
+  // them here would silently drop subs for everyone, since dlExternalSubtitles
+  // defaults to on.
+  function buildRemoteTasks(item, server, token) {
+    const info = buildDownloadInfo(item, server, token);
+    const maxConn = Math.max(1, Math.min(16, parseInt(Settings.get('remoteMaxConnections'), 10) || 1));
+    const staging = remoteStagingRoot();
+
+    const baseOptions = {
+      dir: staging,
+      // Never invent "S01E01.1.mkv" next to the real file — a leftover from an
+      // aborted run should be resumed/replaced, not duplicated into the library.
+      'auto-file-renaming': 'false',
+      'allow-overwrite': 'true',
+      continue: 'true',
+      // A stranger's media server is not a CDN — keep retries gentle.
+      'max-tries': '5',
+      'retry-wait': '10'
+    };
+
+    const tasks = [{
+      url: getFullBypassUrl(item, server, token),
+      relativePath: info.fullPath,
+      displayName: info.displayName || info.filename,
+      itemId: item.Id,
+      // Kept so the transfer panel can write this item to download history once
+      // it actually lands — subtitle tasks deliberately carry no item.
+      item,
+      kind: 'media',
+      contentKind: contentKindOf(item),
+      options: {
+        ...baseOptions,
+        out: info.fullPath,
+        'max-connection-per-server': String(maxConn),
+        split: String(maxConn)
+      }
+    }];
+
+    (info.subtitles || []).forEach(sub => {
+      if (!sub || !sub.url || !sub.filename) return;
+      tasks.push({
+        url: sub.url,
+        relativePath: info.folderPath ? `${info.folderPath}/${sub.filename}` : sub.filename,
+        displayName: sub.filename,
+        itemId: item.Id,
+        kind: 'subtitle',
+        // Subtitles must follow their video wherever it is redirected.
+        contentKind: contentKindOf(item),
+        options: {
+          ...baseOptions,
+          out: info.folderPath ? `${info.folderPath}/${sub.filename}` : sub.filename,
+          // Subtitles are a few KB — a single connection is plenty.
+          'max-connection-per-server': '1',
+          split: '1'
+        }
+      });
+    });
+
+    return tasks;
+  }
+
+  // Probes the endpoint and reports back everything the UI needs to tell the
+  // user what is (or isn't) set up, in one round-trip each.
+  async function testRemoteConnection() {
+    // aria2's RPC is plain HTTP unless it sits behind a TLS proxy. Having "Use
+    // HTTPS" on against a bare daemon fails in a way that reads like a network
+    // or firewall problem, so probe the other scheme and self-correct rather
+    // than making the user work it out.
+    let version;
+    try {
+      version = await aria2Call('aria2.getVersion', [], 8000);
+    } catch (error) {
+      const secure = Boolean(Settings.get('remoteSecure'));
+      const fallbackScheme = secure ? 'http' : 'https';
+      let fallbackWorked = false;
+
+      try {
+        const probe = await gmFetch(remoteEndpoint(fallbackScheme), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 'pulsegrab-scheme-probe',
+            method: 'aria2.getVersion', params: remoteParams([])
+          }),
+          signal: { timeout: 8000 }
+        });
+        fallbackWorked = probe.ok;
+      } catch (e) { /* the other scheme is no better; report the original error */ }
+
+      if (!fallbackWorked) throw error;
+
+      Settings.set('remoteSecure', !secure);
+      showNotification(
+        `aria2 answers over ${fallbackScheme.toUpperCase()}, not ${secure ? 'HTTPS' : 'HTTP'} — "Use HTTPS" has been corrected for you.`,
+        'success', 6000
+      );
+      version = await aria2Call('aria2.getVersion', [], 8000);
+    }
+
+    let hookInstalled = false;
+    let foreignHook = null;
+
+    try {
+      const options = await aria2Call('aria2.getGlobalOption', [], 8000);
+      const hookPath = (options && options['on-download-complete']) || '';
+
+      // Merely having *a* hook proves nothing: p3terx/aria2-pro ships with
+      // `on-download-complete=/root/.aria2/clean.sh` preconfigured. Treating that
+      // as "set up" would tell the user everything is fine while their files
+      // quietly pile up in staging. Match our own script by name instead.
+      hookInstalled = /pulsegrab/i.test(hookPath);
+      if (hookPath && !hookInstalled) foreignHook = hookPath;
+    } catch (e) {
+      // Older builds may not expose getGlobalOption; not fatal.
+      logDebug('[MyServer] getGlobalOption unavailable:', e.message);
+    }
+
+    return { version: version && version.version, hookInstalled, foreignHook };
+  }
+
+  // Queue one item and watch it briefly. Catches the single most common failure:
+  // the destination box cannot reach the source server (VPN-only, LAN-only, or
+  // behind a firewall), which otherwise shows up as every file failing at once.
+  async function remotePreflight(task) {
+    const [added] = await aria2AddBatch([task]);
+    if (!added.gid) {
+      throw new Error(`aria2 refused the first item: ${added.error}`);
+    }
+
+    const deadline = Date.now() + CONFIG.remote.preflightTimeout;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 700));
+
+      let status;
+      try {
+        status = await aria2Call('aria2.tellStatus', [added.gid, ['status', 'errorCode', 'errorMessage', 'completedLength']], 8000);
+      } catch (e) {
+        continue; // transient; keep probing until the deadline
+      }
+
+      if (status.status === 'error') {
+        const sourceHost = (() => {
+          try { return new URL(task.url).host; } catch (e) { return 'the source server'; }
+        })();
+        try { await aria2Call('aria2.removeDownloadResult', [added.gid], 5000); } catch (e) { /* best effort */ }
+
+        const detail = status.errorMessage || `error code ${status.errorCode}`;
+        const code = String(status.errorCode);
+
+        // Verified against aria2 1.37: 1 = connect failed, 2 = timeout,
+        // 6 = network problem, 19 = name resolution failed, 29 = service
+        // unavailable. All of these mean the destination has no route to the
+        // source — the single most common way this feature "doesn't work".
+        if (['1', '2', '6', '19', '29'].includes(code)) {
+          throw new Error(`${remoteHost()} can't reach ${sourceHost}. This transfer runs server-to-server, not through this browser — so your server needs its own route to ${sourceHost} (public DNS, a reverse proxy, or a VPN it's joined to). Details: ${detail}`);
+        }
+        // 3 = resource not found, 24 = HTTP auth failed. The route works; the
+        // credentials in the URL don't.
+        if (['3', '24'].includes(code)) {
+          throw new Error(`${sourceHost} rejected the request (${detail}). The session token in the download links has most likely expired — reload the media server page and click Get Links again.`);
+        }
+        throw new Error(`The first file failed: ${detail}`);
+      }
+
+      // Only bytes on the wire (or an outright completion) prove the route.
+      // Anything else — 'waiting' behind aria2's concurrency limit, 'active'
+      // with nothing transferred yet — keeps polling until the deadline.
+      if (status.status === 'complete') return added;
+      if (status.status === 'active' && Number(status.completedLength) > 0) return added;
+    }
+
+    // Still pending at the deadline: aria2 accepted it and isn't erroring, so
+    // let the rest through rather than blocking a legitimately slow start.
+    return added;
+  }
+
+  async function sendToRemoteServer(items, server, token, onProgress = () => {}, destinationOverrides = null) {
+    const uniqueItems = deduplicateItems(items);
+    if (!uniqueItems.length) {
+      throw new Error('Nothing to send — no downloadable files in this selection.');
+    }
+
+    const allTasks = applyDestinationOverrides(
+      uniqueItems.flatMap(item => buildRemoteTasks(item, server, token)),
+      destinationOverrides
+    );
+
+    // constructDownloadUrl() returns null for items with no resolvable media
+    // source (e.g. Plex containers lacking _plexPartKey). Drop them here so the
+    // user gets a real count instead of an opaque batch of aria2 faults.
+    const tasks = allTasks.filter(task => typeof task.url === 'string' && task.url);
+    const unresolvable = allTasks.length - tasks.length;
+
+    if (!tasks.length) {
+      throw new Error(`None of the ${uniqueItems.length} selected item(s) have a resolvable download URL on this server.`);
+    }
+
+    const mediaCount = tasks.filter(task => task.kind === 'media').length;
+    const subtitleCount = tasks.length - mediaCount;
+
+    // A loopback source can never be fetched by another machine. Catch it before
+    // queueing hundreds of links that are all guaranteed to fail.
+    const sourceHost = (() => {
+      try { return new URL(tasks[0].url).hostname; } catch (e) { return ''; }
+    })();
+    // URL.hostname returns IPv6 literals bracketed, so strip those before testing.
+    if (/^(localhost$|127\.|::1$|0\.0\.0\.0$)/i.test(sourceHost.replace(/^\[|\]$/g, ''))) {
+      throw new Error(`The media server address is ${sourceHost}, which only means "this computer". ${remoteHost()} can't fetch from it — open the media server by its network address (hostname or LAN/public IP) and try again.`);
+    }
+
+    logDebug(`[MyServer] Queueing ${mediaCount} media + ${subtitleCount} subtitle file(s) to ${remoteEndpoint()} (staging: ${remoteStagingRoot()})`);
+
+    // Queueing the same file twice puts two downloads on one path, and aria2
+    // kills the second with "File exists, but a control file does not exist".
+    // Easy to trigger by clicking Send twice, so drop anything already queued.
+    let alreadyQueued = 0;
+    try {
+      const inFlight = await aria2Call('system.multicall', [[
+        { methodName: 'aria2.tellActive', params: remoteParams([['gid', 'files']]) },
+        { methodName: 'aria2.tellWaiting', params: remoteParams([0, 1000, ['gid', 'files']]) }
+      ]], CONFIG.remote.timeout);
+
+      const queuedPaths = new Set();
+      (inFlight || []).forEach(entry => {
+        const list = Array.isArray(entry) ? entry[0] : null;
+        (list || []).forEach(download => {
+          (download.files || []).forEach(file => { if (file.path) queuedPaths.add(file.path); });
+        });
+      });
+
+      if (queuedPaths.size) {
+        const staging = remoteStagingRoot();
+        const filtered = tasks.filter(task => !queuedPaths.has(`${staging}/${task.relativePath}`));
+        alreadyQueued = tasks.length - filtered.length;
+        if (!filtered.length) {
+          throw new Error(`All ${tasks.length} file(s) are already queued on your server — nothing to add.`);
+        }
+        tasks.length = 0;
+        tasks.push(...filtered);
+      }
+    } catch (error) {
+      if (/already queued/.test(error.message)) throw error;
+      // Couldn't check — carry on rather than blocking a legitimate transfer.
+      logDebug('[MyServer] duplicate check skipped:', error.message);
+    }
+
+    onProgress('Checking the route to the source server…');
+    const first = await remotePreflight(tasks[0]);
+    const queued = [first];
+
+    const rest = tasks.slice(1);
+    for (let i = 0; i < rest.length; i += CONFIG.remote.batchSize) {
+      const chunk = rest.slice(i, i + CONFIG.remote.batchSize);
+      onProgress(`Queueing ${Math.min(i + chunk.length, rest.length) + 1} of ${tasks.length}…`);
+      const added = await aria2AddBatch(chunk);
+      queued.push(...added);
+    }
+
+    const accepted = queued.filter(entry => entry.gid);
+    const rejected = queued.filter(entry => !entry.gid);
+
+    if (rejected.length) {
+      console.warn('[MyServer] Some items were rejected by aria2:', rejected.map(r => ({ file: r.task.relativePath, error: r.error })));
+    }
+
+    if (unresolvable) {
+      console.warn(`[MyServer] Skipped ${unresolvable} file(s) with no resolvable download URL.`);
+    }
+
+    if (alreadyQueued) {
+      console.warn(`[MyServer] Skipped ${alreadyQueued} file(s) already queued on the server.`);
+    }
+
+    logDebug(`[MyServer] ${accepted.length} queued, ${rejected.length} rejected, ${unresolvable} unresolvable, ${alreadyQueued} duplicates`);
+    return { accepted, rejected, unresolvable, alreadyQueued, total: tasks.length, mediaCount, subtitleCount };
+  }
+
+  // ---------- MyJDownloader (zero-setup server-to-server) ----------
+  // Relays the link list to a JDownloader running anywhere — no open ports, no
+  // firewall rules, no LAN requirement, nothing to configure on the destination
+  // beyond installing JDownloader and signing into My.JDownloader.
+  //
+  // Protocol (verified byte-for-byte against the reference implementation at
+  // github.com/mmarquezs/My.Jdownloader-API-Python-Library):
+  //   loginSecret  = SHA256(email.toLowerCase() + password + "server")
+  //   deviceSecret = SHA256(email.toLowerCase() + password + "device")
+  //   GET /my/connect?email=…&appkey=…&rid=…&signature=HMAC-SHA256(loginSecret, query)
+  //   serverToken  = SHA256(loginSecret  || hexBytes(sessionToken))
+  //   deviceToken  = SHA256(deviceSecret || hexBytes(sessionToken))
+  //   device calls POST to /t_<sessionToken>_<deviceId><path>, body AES-128-CBC
+  //   (IV = first half of the token, key = second half), base64, PKCS#7.
+  //
+  // CryptoJS is used rather than WebCrypto because crypto.subtle only exists in
+  // secure contexts — plenty of people browse their media server over plain
+  // http:// on a LAN address, where it is undefined.
+
+  const MYJD_API = 'https://api.jdownloader.org';
+  const MYJD_APPKEY = 'PulseGrab';
+  const MYJD_CONTENT_TYPE = 'application/aesjson-jd; charset=utf-8';
+
+  function myjdCrypto() {
+    const lib = typeof CryptoJS !== 'undefined' ? CryptoJS
+      : (typeof unsafeWindow !== 'undefined' ? unsafeWindow.CryptoJS : undefined);
+    if (!lib) {
+      throw new Error('The crypto library failed to load. Reinstall PulseGrab, or check that your userscript manager can reach cdnjs.cloudflare.com.');
+    }
+    return lib;
+  }
+
+  function myjdSecret(email, password, domain) {
+    const C = myjdCrypto();
+    return C.SHA256(C.enc.Utf8.parse(email.toLowerCase() + password + domain.toLowerCase()))
+      .toString(C.enc.Hex);
+  }
+
+  // SHA256(secretBytes || sessionTokenBytes), both taken as raw bytes from hex.
+  function myjdDeriveToken(secretHex, sessionTokenHex) {
+    const C = myjdCrypto();
+    const combined = C.enc.Hex.parse(secretHex).clone().concat(C.enc.Hex.parse(sessionTokenHex));
+    return C.SHA256(combined).toString(C.enc.Hex);
+  }
+
+  function myjdSplitToken(tokenHex) {
+    const C = myjdCrypto();
+    return {
+      iv: C.enc.Hex.parse(tokenHex.slice(0, 32)),
+      key: C.enc.Hex.parse(tokenHex.slice(32))
+    };
+  }
+
+  function myjdEncrypt(tokenHex, plaintext) {
+    const C = myjdCrypto();
+    const { iv, key } = myjdSplitToken(tokenHex);
+    return C.AES.encrypt(C.enc.Utf8.parse(plaintext), key,
+      { iv, mode: C.mode.CBC, padding: C.pad.Pkcs7 }).toString();
+  }
+
+  function myjdDecrypt(tokenHex, base64) {
+    const C = myjdCrypto();
+    const { iv, key } = myjdSplitToken(tokenHex);
+    const plain = C.AES.decrypt(base64, key,
+      { iv, mode: C.mode.CBC, padding: C.pad.Pkcs7 }).toString(C.enc.Utf8);
+    if (!plain) throw new Error('Could not decrypt the My.JDownloader reply — the stored credentials are probably stale. Reconnect in Settings → My Server.');
+    return plain;
+  }
+
+  function myjdSign(tokenHex, data) {
+    const C = myjdCrypto();
+    return C.HmacSHA256(C.enc.Utf8.parse(data), C.enc.Hex.parse(tokenHex)).toString(C.enc.Hex);
+  }
+
+  let myjdRequestId = Date.now();
+  // Session state is deliberately in-memory only: it expires server-side anyway,
+  // and re-deriving it from the stored secrets is a single request.
+  let myjdSession = null; // { sessionToken, serverToken, deviceToken }
+
+  async function myjdGet(path, params, signingTokenHex, decryptTokenHex) {
+    myjdRequestId++;
+    const query = path + '?'
+      + params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')
+      + `&rid=${myjdRequestId}`;
+    const signed = `${query}&signature=${myjdSign(signingTokenHex, query)}`;
+
+    let response;
+    try {
+      response = await gmFetch(MYJD_API + signed, { signal: { timeout: 20000 } });
+    } catch (error) {
+      throw new Error(`Could not reach My.JDownloader (${error.message}). Check your internet connection.`);
+    }
+
+    const body = await response.text();
+    if (!response.ok) {
+      // Errors come back as plaintext JSON, not encrypted.
+      let detail = `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(body);
+        detail = parsed.type || parsed.src || detail;
+        if (/AUTH_FAILED|EMAIL|PASSWORD/i.test(detail)) {
+          throw new Error('My.JDownloader rejected those credentials. Check the email and password you use at my.jdownloader.org.');
+        }
+      } catch (e) {
+        if (e.message.includes('My.JDownloader rejected')) throw e;
+      }
+      throw new Error(`My.JDownloader error: ${detail}`);
+    }
+
+    return JSON.parse(myjdDecrypt(decryptTokenHex, body));
+  }
+
+  // Establishes a session from the stored secrets. Called lazily and re-called
+  // transparently when the server expires the session mid-use.
+  async function myjdConnect() {
+    const email = (Settings.get('myjdEmail') || '').trim();
+    const loginSecret = Settings.get('myjdLoginSecret');
+    const deviceSecret = Settings.get('myjdDeviceSecret');
+
+    if (!email || !loginSecret || !deviceSecret) {
+      throw new Error('Not signed in to My.JDownloader. Open Settings → My Server and connect.');
+    }
+
+    const result = await myjdGet('/my/connect',
+      [['email', email], ['appkey', MYJD_APPKEY]], loginSecret, loginSecret);
+
+    if (!result || !result.sessiontoken) {
+      throw new Error('My.JDownloader did not return a session token.');
+    }
+
+    myjdSession = {
+      sessionToken: result.sessiontoken,
+      serverToken: myjdDeriveToken(loginSecret, result.sessiontoken),
+      deviceToken: myjdDeriveToken(deviceSecret, result.sessiontoken)
+    };
+    return myjdSession;
+  }
+
+  async function myjdEnsureSession() {
+    return myjdSession || myjdConnect();
+  }
+
+  async function myjdListDevices() {
+    const session = await myjdEnsureSession();
+    const result = await myjdGet('/my/listdevices',
+      [['sessiontoken', session.sessionToken]], session.serverToken, session.serverToken);
+    return (result && result.list) || [];
+  }
+
+  // Signs in from scratch, stores only the derived secrets, and returns the
+  // device list so the user can pick one.
+  async function myjdSignIn(email, password) {
+    const trimmed = (email || '').trim();
+    if (!trimmed || !password) throw new Error('Enter your My.JDownloader email and password.');
+
+    Settings.set('myjdEmail', trimmed);
+    Settings.set('myjdLoginSecret', myjdSecret(trimmed, password, 'server'));
+    Settings.set('myjdDeviceSecret', myjdSecret(trimmed, password, 'device'));
+    myjdSession = null;
+
+    await myjdConnect();
+    return myjdListDevices();
+  }
+
+  // One authenticated call against a specific JDownloader instance.
+  async function myjdDeviceAction(deviceId, actionPath, params) {
+    const run = async () => {
+      const session = await myjdEnsureSession();
+      myjdRequestId++;
+
+      // Object params are sent as JSON *strings*, matching the reference client.
+      const encodedParams = (params || []).map(param =>
+        typeof param === 'string' ? param : JSON.stringify(param));
+
+      const payload = JSON.stringify({
+        apiVer: 1,
+        url: actionPath,
+        params: encodedParams,
+        rid: myjdRequestId
+      });
+
+      const response = await gmFetch(
+        `${MYJD_API}/t_${session.sessionToken}_${deviceId}${actionPath}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': MYJD_CONTENT_TYPE },
+          body: myjdEncrypt(session.deviceToken, payload),
+          signal: { timeout: 30000 }
+        }
+      );
+
+      const body = await response.text();
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try { detail = JSON.parse(body).type || detail; } catch (e) { /* keep status */ }
+        const error = new Error(detail);
+        error.myjdStatus = response.status;
+        throw error;
+      }
+      return JSON.parse(myjdDecrypt(session.deviceToken, body));
+    };
+
+    try {
+      return await run();
+    } catch (error) {
+      // 403 / TOKEN_INVALID means the session lapsed — re-establish once.
+      if (error.myjdStatus === 403 || /token/i.test(error.message)) {
+        logDebug('[MyJD] Session expired, reconnecting…');
+        myjdSession = null;
+        await myjdConnect();
+        return run();
+      }
+      if (error.myjdStatus === 404) {
+        throw new Error('That JDownloader instance is offline. Start it (or pick another device in Settings → My Server).');
+      }
+      throw error;
+    }
+  }
+
+  // ---------- Sending to MyJDownloader ----------
+  // addLinks takes one destinationFolder per call, so items are grouped by their
+  // target folder and each group is sent as its own package. That is what lets
+  // this path skip aria2's staging folder and move hook entirely: JDownloader
+  // writes *.part while downloading and renames on completion, so the media
+  // server never sees a half-finished file.
+  function myjdDestinationRoot() {
+    return (Settings.get('myjdDestination') || '').trim().replace(/\/+$/, '');
+  }
+
+  async function sendToMyJDownloader(items, server, token, onProgress = () => {}, destinationOverrides = null) {
+    const deviceId = Settings.get('myjdDeviceId');
+    if (!deviceId) {
+      throw new Error('No JDownloader selected. Open Settings → My Server and pick your device.');
+    }
+
+    const root = myjdDestinationRoot();
+    if (!root) {
+      throw new Error('Set the destination folder (the library path on the JDownloader machine) in Settings → My Server.');
+    }
+
+    const uniqueItems = deduplicateItems(items);
+    if (!uniqueItems.length) throw new Error('Nothing to send — no downloadable files in this selection.');
+
+    const allTasks = applyDestinationOverrides(
+      uniqueItems.flatMap(item => buildRemoteTasks(item, server, token)),
+      destinationOverrides
+    );
+    const tasks = allTasks.filter(task => typeof task.url === 'string' && task.url);
+    const unresolvable = allTasks.length - tasks.length;
+
+    if (!tasks.length) {
+      throw new Error(`None of the ${uniqueItems.length} selected item(s) have a resolvable download URL on this server.`);
+    }
+
+    // Group by the folder each file belongs in — one package per folder.
+    const groups = new Map();
+    tasks.forEach(task => {
+      const folder = task.relativePath.includes('/')
+        ? task.relativePath.slice(0, task.relativePath.lastIndexOf('/'))
+        : '';
+      if (!groups.has(folder)) groups.set(folder, []);
+      groups.get(folder).push(task);
+    });
+
+    onProgress('Connecting to your JDownloader…');
+    await myjdEnsureSession();
+
+    let sent = 0;
+    let packages = 0;
+    const failures = [];
+    const groupList = [...groups.entries()];
+
+    for (let i = 0; i < groupList.length; i++) {
+      const [folder, groupTasks] = groupList[i];
+      onProgress(`Sending package ${i + 1} of ${groupList.length}…`);
+
+      try {
+        await myjdDeviceAction(deviceId, '/linkgrabberv2/addLinks', [{
+          links: groupTasks.map(task => task.url).join('\n'),
+          packageName: folder ? folder.split('/').pop() : 'PulseGrab',
+          destinationFolder: folder ? `${root}/${folder}` : root,
+          autostart: true,
+          priority: 'DEFAULT',
+          // Packagizer rules would happily relocate our carefully built paths.
+          overwritePackagizerRules: true
+        }]);
+        sent += groupTasks.length;
+        packages++;
+      } catch (error) {
+        failures.push({ folder, count: groupTasks.length, error: error.message });
+        console.warn(`[MyJD] Package "${folder}" failed:`, error.message);
+      }
+    }
+
+    if (!sent) {
+      throw new Error(`JDownloader rejected every package. First error: ${failures[0] ? failures[0].error : 'unknown'}`);
+    }
+
+    const mediaCount = tasks.filter(task => task.kind === 'media').length;
+    logDebug(`[MyJD] Sent ${sent} file(s) in ${packages} package(s), ${failures.length} package(s) failed`);
+
+    return {
+      sent,
+      packages,
+      failures,
+      unresolvable,
+      total: tasks.length,
+      mediaCount,
+      subtitleCount: tasks.length - mediaCount
+    };
+  }
+
+  // ---------- Your own media server (discovery + browsing) ----------
+  // Separate from the server you're downloading *from*. Used only to read your
+  // real library names/types and to browse folders, so you never have to type a
+  // path from memory. Never used to download anything.
+  //
+  // Emby and Jellyfin share this API shape (Jellyfin forked from Emby):
+  //   GET {prefix}/Library/VirtualFolders        -> libraries + on-disk Locations
+  //   GET {prefix}/Environment/DirectoryContents -> server-side folder listing
+  // Plex is a different API and is handled separately where it differs.
+
+  function destPrefixFor(type) {
+    return type === 'emby' ? '/emby' : '';
+  }
+
+  // Prefer explicitly configured credentials; fall back to the session we
+  // already have when this tab happens to be on the user's own server.
+  function resolveDestServer() {
+    const url = normalizeServerAddress(Settings.get('destServerUrl') || '');
+    const apiKey = (Settings.get('destApiKey') || '').trim();
+    const type = Settings.get('destServerType') || SERVER_TYPE;
+
+    if (url && apiKey) {
+      return { url, token: apiKey, type, source: 'configured' };
+    }
+
+    // Session fallback: only valid if the configured host matches this tab's
+    // server, or nothing is configured at all.
+    try {
+      const session = getServerAndToken();
+      if (session && session.server && session.token) {
+        const sameHost = !url || (() => {
+          try { return new URL(url).host === new URL(session.server).host; } catch (e) { return false; }
+        })();
+        if (sameHost) {
+          return {
+            url: session.server,
+            token: session.token,
+            type: SERVER_TYPE,
+            userId: session.userId,
+            source: 'session'
+          };
+        }
+      }
+    } catch (e) {
+      logDebug('[Dest] session fallback unavailable:', e.message);
+    }
+
+    return null;
+  }
+
+  // Each product wants its credential in a different place:
+  //   Emby     — api_key query parameter
+  //   Jellyfin — Authorization header; the api_key query param is deprecated and
+  //              is being removed, so don't rely on it even though it still works
+  //   Plex     — X-Plex-Token query parameter
+  function destRequestFor(dest, path, params = {}) {
+    const query = new URLSearchParams(params);
+    const headers = { Accept: 'application/json' };
+
+    if (dest.type === 'plex') {
+      query.set('X-Plex-Token', dest.token);
+    } else if (dest.type === 'jellyfin') {
+      headers.Authorization = `MediaBrowser Client="PulseGrab", Device="Browser", DeviceId="PulseGrab", Version="1.2.0", Token="${dest.token}"`;
+    } else {
+      query.set('api_key', dest.token);
+    }
+
+    const queryString = query.toString();
+    return {
+      url: `${dest.url}${destPrefixFor(dest.type)}${path}${queryString ? `?${queryString}` : ''}`,
+      headers
+    };
+  }
+
+  async function destApiGet(dest, path, params = {}, timeout = 15000) {
+    const { url, headers } = destRequestFor(dest, path, params);
+
+    let response;
+    try {
+      response = await gmFetch(url, { headers, signal: { timeout } });
+    } catch (error) {
+      throw new Error(`Could not reach your server at ${dest.url} (${error.message}).`);
+    }
+
+    const body = await response.text();
+
+    // Emby answers permission failures with a plain-text sentence rather than
+    // JSON, so check the text before trusting the status code.
+    if (/does not have access to (\w+) feature/i.test(body)) {
+      const error = new Error(
+        'That account is not a server administrator, so it cannot browse folders. '
+        + 'Library discovery still works — for browsing, use an API key from an admin account '
+        + '(Emby → Advanced → API Keys).'
+      );
+      error.needsAdmin = true;
+      throw error;
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(dest.source === 'configured'
+        ? 'Your server rejected the API key. Create a new one in Emby → Advanced → API Keys.'
+        : 'Your server rejected this session. Add an API key in Settings → My Server.');
+    }
+    if (!response.ok) {
+      throw new Error(`Your server returned HTTP ${response.status} for ${path}.`);
+    }
+
+    try {
+      return JSON.parse(body);
+    } catch (e) {
+      throw new Error(`Your server returned an unexpected reply for ${path}: ${body.slice(0, 120)}`);
+    }
+  }
+
+  // Identify the destination without needing auth — confirms it's reachable and
+  // tells us whether it's Emby or Jellyfin so the right prefix is used.
+  // A bare "host:port" is ambiguous. normalizeServerAddress() assumes https,
+  // which is wrong for the overwhelmingly common case of a LAN media server on
+  // plain HTTP — so when no scheme is given, try both rather than guessing.
+  function destBaseCandidates(raw) {
+    const trimmed = String(raw || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return [];
+    if (/^https?:\/\//i.test(trimmed)) return [trimmed];
+    return [`http://${trimmed}`, `https://${trimmed}`];
+  }
+
+  async function detectDestServer(url, type) {
+    const bases = destBaseCandidates(url);
+    if (!bases.length) throw new Error('Enter your server address first.');
+
+    let lastError = null;
+    for (const base of bases) {
+      try {
+        return await detectDestServerAt(base, type);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (bases.length > 1) {
+      throw new Error(
+        `No media server answered at ${bases.join(' or ')}. Check the address and port, `
+        + 'and that your userscript manager was allowed to connect to this host.'
+      );
+    }
+    throw lastError;
+  }
+
+  async function detectDestServerAt(base, type) {
+    const candidates = type ? [type] : ['emby', 'jellyfin', 'plex'];
+    let lastError = null;
+
+    for (const candidate of candidates) {
+      try {
+        if (candidate === 'plex') {
+          // Plex identifies itself without a token via /identity.
+          const response = await gmFetch(`${base}/identity`, {
+            headers: { Accept: 'application/json' }, signal: { timeout: 10000 }
+          });
+          if (!response.ok) { lastError = new Error(`HTTP ${response.status}`); continue; }
+          const info = await response.json();
+          const container = (info && info.MediaContainer) || {};
+          if (!container.machineIdentifier) { lastError = new Error('not Plex'); continue; }
+          return { url: base, type: 'plex', name: 'Plex Media Server', version: container.version || '' };
+        }
+
+        const response = await gmFetch(
+          `${base}${destPrefixFor(candidate)}/System/Info/Public`,
+          { headers: { Accept: 'application/json' }, signal: { timeout: 10000 } }
+        );
+        if (!response.ok) { lastError = new Error(`HTTP ${response.status}`); continue; }
+
+        const info = await response.json();
+        const product = (info.ProductName || '').toLowerCase();
+        return {
+          url: base,
+          // The server tells us what it is; trust that over the guess.
+          type: product.includes('jellyfin') ? 'jellyfin' : (product.includes('emby') ? 'emby' : candidate),
+          name: info.ServerName || '',
+          version: info.Version || ''
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw new Error(`Could not identify a media server at ${base} (${lastError ? lastError.message : 'no response'}).`);
+  }
+
+  // Real libraries, with the paths they occupy on disk.
+  async function fetchDestLibraries(dest) {
+    if (dest.type === 'plex') {
+      const data = await destApiGet(dest, '/library/sections', { 'X-Plex-Container-Size': '200' });
+      const sections = (data && data.MediaContainer && data.MediaContainer.Directory) || [];
+      return sections.map(section => ({
+        name: section.title,
+        type: normalizeCollectionType(section.type),
+        locations: (section.Location || []).map(loc => loc.path).filter(Boolean)
+      })).filter(library => library.locations.length);
+    }
+
+    const folders = await destApiGet(dest, '/Library/VirtualFolders');
+    return (Array.isArray(folders) ? folders : []).map(folder => ({
+      name: folder.Name,
+      type: normalizeCollectionType(folder.CollectionType),
+      locations: (folder.Locations || []).filter(Boolean)
+    })).filter(library => library.locations.length);
+  }
+
+  // Map the many names these products use onto our three content kinds.
+  function normalizeCollectionType(raw) {
+    const value = String(raw || '').toLowerCase();
+    // "musicvideos" contains "music" but holds videos, not tracks — check it
+    // before the audio test or music videos end up in the music library.
+    if (value.includes('musicvideo')) return 'other';
+    if (value.includes('movie')) return 'movie';
+    if (value.includes('tvshow') || value === 'show' || value === 'series') return 'episode';
+    if (value.includes('music') || value === 'artist') return 'audio';
+    return 'other';
+  }
+
+  // Server-side folder listing, for the browser dialog.
+  // Base64 that survives non-ASCII folder names — btoa() alone throws on them,
+  // and library paths here are full of accented titles.
+  function base64Utf8(value) {
+    const bytes = new TextEncoder().encode(String(value));
+    let binary = '';
+    bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+    return btoa(binary);
+  }
+
+  async function browseDestDirectory(dest, path, { includeFiles = false } = {}) {
+    if (dest.type === 'plex') {
+      // Plex: /services/browse/<base64 path>, returns Path (folders) + File nodes.
+      const suffix = path ? `/${base64Utf8(path)}` : '';
+      const data = await destApiGet(dest, `/services/browse${suffix}`, { includeFiles: includeFiles ? '1' : '0' });
+      const container = (data && data.MediaContainer) || {};
+      const dirs = container.Path || container.Directory || [];
+      const files = includeFiles ? (container.File || []) : [];
+      const nodes = [...(Array.isArray(dirs) ? dirs : [dirs]), ...(Array.isArray(files) ? files : [files])];
+
+      return nodes
+        .filter(node => node && node.path)
+        .map(node => ({
+          name: node.title || node.path.split('/').filter(Boolean).pop(),
+          path: node.path,
+          isFile: Boolean(container.File && [].concat(container.File).includes(node))
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    const entries = await destApiGet(dest, '/Environment/DirectoryContents', {
+      path,
+      includeDirectories: 'true',
+      includeFiles: includeFiles ? 'true' : 'false'
+    });
+
+    return (Array.isArray(entries) ? entries : [])
+      .filter(entry => entry && entry.Path)
+      .filter(entry => includeFiles || entry.Type !== 'File')
+      .map(entry => ({ name: entry.Name, path: entry.Path, isFile: entry.Type === 'File' }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ---------- Path translation ----------
+  // Your media server and your downloader mount the same storage at different
+  // paths (Emby sees /media/Filmes, aria2 sees /downloads/Filmes). Everything
+  // below the shared root is identical, so we only need the two roots.
+
+  function longestCommonPathPrefix(input) {
+    const paths = (input || []).filter(path => typeof path === 'string' && path);
+    if (!paths.length) return '';
+    const split = paths.map(p => p.replace(/\/+$/, '').split('/'));
+    const first = split[0];
+    const common = [];
+    for (let i = 0; i < first.length; i++) {
+      if (split.every(parts => parts[i] === first[i])) common.push(first[i]);
+      else break;
+    }
+    const prefix = common.join('/');
+    // A single library would otherwise make its own folder the "root".
+    return paths.length === 1 ? prefix.replace(/\/[^/]+$/, '') : prefix;
+  }
+
+  function destMediaRoot(libraries) {
+    const stored = (Settings.get('destMediaRoot') || '').trim();
+    if (stored) return stored.replace(/\/+$/, '');
+    const all = libraries.flatMap(library => library.locations);
+    return longestCommonPathPrefix(all);
+  }
+
+  // The downloader's own root — where it writes, in its own filesystem view.
+  function downloaderRoot() {
+    return remoteMethod() === 'aria2'
+      ? (Settings.get('remoteLibraryDir') || '/downloads').replace(/\/+$/, '')
+      : (Settings.get('myjdDestination') || '').replace(/\/+$/, '');
+  }
+
+  // "/media/Anime Series" -> "Anime Series" (relative to the shared root).
+  function destPathToRelative(path, mediaRoot) {
+    const clean = String(path || '').replace(/\/+$/, '');
+    const root = String(mediaRoot || '').replace(/\/+$/, '');
+    if (root && clean.startsWith(root + '/')) return clean.slice(root.length + 1);
+    if (root && clean === root) return '';
+    // Outside the known root — fall back to the last segment so the user still
+    // gets something sane rather than an absolute path leaking through.
+    return clean.split('/').filter(Boolean).pop() || '';
+  }
+
+  // ---------- Discovered library cache ----------
+  // Cached so the picker still offers real folders when the server is briefly
+  // unreachable, or when you're browsing someone else's server.
+  function cachedDestLibraries() {
+    try {
+      const parsed = JSON.parse(Settings.get('destLibrariesCache') || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function refreshDestLibraries() {
+    const dest = resolveDestServer();
+    if (!dest) throw new Error('Connect your own server first (Settings → My Server → My Library).');
+
+    const libraries = await fetchDestLibraries(dest);
+    const mediaRoot = destMediaRoot(libraries);
+
+    const snapshot = libraries.map(library => ({
+      name: library.name,
+      type: library.type,
+      path: library.locations[0],
+      // What the downloader must be told, relative to its own root.
+      folder: destPathToRelative(library.locations[0], mediaRoot)
+    })).filter(library => library.folder);
+
+    Settings.set('destLibrariesCache', JSON.stringify(snapshot));
+    if (!Settings.get('destMediaRoot')) Settings.set('destMediaRoot', mediaRoot);
+    return snapshot;
+  }
+
+  // Everything the pickers can offer: real libraries first, then any folders the
+  // user typed manually, then whatever is currently saved as a default.
+  function destFolderChoices() {
+    const choices = cachedDestLibraries().map(library => ({
+      folder: library.folder,
+      label: library.name === library.folder ? library.name : `${library.name}  (${library.folder})`,
+      type: library.type,
+      fromServer: true
+    }));
+
+    const seen = new Set(choices.map(choice => choice.folder));
+    const manual = [
+      ...(Settings.get('libraryFoldersExtra') || '').split(',').map(name => name.trim()),
+      Settings.get('libraryFolderMovies'),
+      Settings.get('libraryFolderShows'),
+      Settings.get('libraryFolderMusic')
+    ].filter(Boolean);
+
+    manual.forEach(folder => {
+      if (seen.has(folder)) return;
+      seen.add(folder);
+      choices.push({ folder, label: folder, type: 'other', fromServer: false });
+    });
+
+    return choices;
+  }
+
+  // ---------- Destination memory ----------
+  // Sending season 2 of a show should not ask again where season 1 went. Keyed
+  // on the series (or album artist) so it survives across sessions and servers.
+  function destinationMemory() {
+    try {
+      const parsed = JSON.parse(Settings.get('destinationMemory') || '{}');
+      return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // A stable label for "the thing this item belongs to".
+  function memoryKeyFor(item) {
+    if (!item) return null;
+    if (item.Type === 'Episode') {
+      const series = item.SeriesName || item.SeriesStudioName;
+      return series ? `series:${series.toLowerCase()}` : null;
+    }
+    if (item.Type === 'Audio') {
+      const artist = item.AlbumArtist || (item.Artists && item.Artists[0]);
+      return artist ? `artist:${artist.toLowerCase()}` : null;
+    }
+    return null; // movies vary too much to guess from one to the next
+  }
+
+  // The folder previously used for these items, but only when every item that
+  // has a remembered home agrees — a mixed batch should still ask.
+  function rememberedFolderFor(items) {
+    const memory = destinationMemory();
+    const folders = new Set();
+    items.forEach(item => {
+      const key = memoryKeyFor(item);
+      if (key && memory[key]) folders.add(memory[key]);
+    });
+    return folders.size === 1 ? [...folders][0] : null;
+  }
+
+  function rememberFolderForItems(items, folder) {
+    if (!folder) return;
+    const memory = destinationMemory();
+    let changed = false;
+    items.forEach(item => {
+      const key = memoryKeyFor(item);
+      if (key && memory[key] !== folder) { memory[key] = folder; changed = true; }
+    });
+    if (!changed) return;
+
+    // Keep it bounded; drop the oldest keys once it gets silly.
+    const keys = Object.keys(memory);
+    if (keys.length > 400) keys.slice(0, keys.length - 400).forEach(key => delete memory[key]);
+    Settings.set('destinationMemory', JSON.stringify(memory));
+  }
+
+  // ---------- Pinned folders ----------
+  function pinnedFolders() {
+    return (Settings.get('pinnedFolders') || '')
+      .split(',').map(name => name.trim()).filter(Boolean);
+  }
+
+  function isPinned(folder) {
+    return pinnedFolders().includes(folder);
+  }
+
+  function togglePinned(folder) {
+    if (!folder) return false;
+    const current = pinnedFolders();
+    const next = current.includes(folder)
+      ? current.filter(entry => entry !== folder)
+      : [...current, folder];
+    Settings.set('pinnedFolders', next.join(', '));
+    return next.includes(folder);
+  }
+
+  // ---------- Destination rules ----------
+  // "Anime => Anime Series" — anything whose source path or title mentions
+  // "Anime" goes to that folder. Beats the remembered folder and the per-type
+  // default, because it is an explicit instruction from the user.
+  function destinationRules() {
+    return (Settings.get('destinationRules') || '')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'))
+      .map(line => {
+        const match = line.split(/\s*(?:=>|->|→)\s*/);
+        if (match.length < 2) return null;
+        const folder = sanitizeFolderName(match.slice(1).join(''));
+        const needle = match[0].trim().toLowerCase();
+        return (needle && folder) ? { needle, folder } : null;
+      })
+      .filter(Boolean);
+  }
+
+  // Everything about an item worth matching a rule against. Path is the most
+  // useful: on Emby it's the source server's own layout, e.g. /media/Anime/...
+  function ruleHaystackFor(item) {
+    if (!item) return '';
+    return [item.Path, item.SeriesName, item.SeriesStudioName, item.Album, item.AlbumArtist, item.Name]
+      .filter(Boolean).join(' | ').toLowerCase();
+  }
+
+  // A rule only applies if it matches *every* item of that kind — a partial
+  // match would silently split a batch across two libraries.
+  function ruleFolderFor(items) {
+    const rules = destinationRules();
+    if (!rules.length || !items.length) return null;
+
+    const haystacks = items.map(ruleHaystackFor);
+    for (const rule of rules) {
+      if (haystacks.every(haystack => haystack.includes(rule.needle))) return rule.folder;
+    }
+    return null;
+  }
+
+  // ---------- Content-type pairing ----------
+  // Libraries usually come in matched pairs that differ only by a suffix:
+  // "Anime Filmes" holds anime movies, "Anime Series" the shows; likewise
+  // "Filmes"/"Series". So a folder chosen for one content type is often the
+  // wrong half of the pair for another. When the discovered library types tell
+  // us a folder is definitely the wrong kind, swap to its sibling.
+  function libraryTypeOfFolder(folder) {
+    const match = cachedDestLibraries().find(library => library.folder === folder);
+    return match ? match.type : null;
+  }
+
+  function tokensOf(folder) {
+    return String(folder || '').toLowerCase().split(/[\s/_-]+/).filter(Boolean);
+  }
+
+  // How much of a name two folders share from the start ("anime filmes" vs
+  // "anime series" share one leading token).
+  function sharedPrefixScore(a, b) {
+    const left = tokensOf(a);
+    const right = tokensOf(b);
+    let score = 0;
+    while (score < left.length && score < right.length && left[score] === right[score]) score++;
+    return score;
+  }
+
+  function folderForKind(folder, kind) {
+    if (!folder || !kind || kind === 'other') return folder;
+
+    const type = libraryTypeOfFolder(folder);
+    // Unknown folder (typed by hand, or no library connected): leave it alone —
+    // we have no evidence it's wrong.
+    if (!type || type === kind) return folder;
+
+    const siblings = cachedDestLibraries()
+      .filter(library => library.type === kind)
+      .map(library => ({ folder: library.folder, score: sharedPrefixScore(folder, library.folder) }))
+      .sort((a, b) => b.score - a.score);
+
+    if (siblings.length && siblings[0].score > 0) return siblings[0].folder;
+
+    // No paired sibling — fall back to whatever this content type normally uses.
+    return defaultFolderForKind(kind) || folder;
+  }
+
+  function recentDestinations() {
+    return (Settings.get('recentDestinations') || '')
+      .split('\n').map(entry => entry.trim()).filter(Boolean).slice(0, 6);
+  }
+
+  function rememberDestination(folder) {
+    if (!folder) return;
+    const next = [folder, ...recentDestinations().filter(entry => entry !== folder)].slice(0, 6);
+    Settings.set('recentDestinations', next.join('\n'));
+  }
+
+  // ---------- Guided setup wizard ----------
+  // Walks someone with no Docker experience from nothing to a working transfer.
+  // Every step that can be checked *is* checked, live, so nobody is left
+  // wondering whether it worked.
+  function showSetupWizard() {
+    const isDarkMode = Settings.get('darkMode');
+    const theme = getTheme();
+
+    const existingSecret = Settings.get('remoteSecret') || '';
+    const state = {
+      step: 0,
+      transport: remoteMethod(),
+      platform: 'truenas',
+      mediaPath: '',
+      configPath: '',
+      port: Settings.get('remotePort') || 6800,
+      truenasUrl: '',
+      maxConnections: Settings.get('remoteMaxConnections') || 1,
+      // Reuse whatever already works — generating a fresh one here would break
+      // an existing install the moment the user reaches the verification step.
+      secret: existingSecret || randomSecret(),
+      hadExistingSecret: Boolean(existingSecret),
+      uid: '', gid: ''
+    };
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 2147483647;
+      display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px);
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      width: 640px; max-width: calc(100vw - 32px); max-height: 92vh;
+      display: flex; flex-direction: column;
+      background: ${isDarkMode ? '#1c1c1c' : '#fff'}; border-radius: 16px;
+      border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+      color: ${isDarkMode ? '#e5e7eb' : '#111827'}; font: 14px system-ui, sans-serif;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.5); overflow: hidden;
+    `;
+
+    let detachEscape = () => {};
+    const close = () => { detachEscape(); overlay.remove(); };
+
+    const card = (id, title, body, selected) => `
+      <button class="wz-card" data-choice="${id}" style="
+        width: 100%; text-align: left; padding: 14px 16px; margin-bottom: 10px;
+        border-radius: 11px; cursor: pointer; display: block;
+        border: 2px solid ${selected ? theme.primary : (isDarkMode ? '#2a2a2a' : '#e5e7eb')};
+        background: ${selected ? `${theme.primary}12` : 'transparent'};
+        color: inherit; font: inherit;
+      ">
+        <div style="font: 600 14px system-ui; margin-bottom: 3px;">${title}</div>
+        <div style="font: 12px system-ui; line-height: 1.5; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">${body}</div>
+      </button>`;
+
+    const field = (id, label, value, placeholder, hint = '') => `
+      <div style="margin-bottom: 13px;">
+        <label style="display: block; font: 600 12px system-ui; margin-bottom: 5px;">${label}</label>
+        <input type="text" id="${id}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" style="
+          width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 8px;
+          border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+          background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;
+        ">
+        ${hint ? `<div style="margin-top: 4px; font: 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">${hint}</div>` : ''}
+      </div>`;
+
+    const codeBlock = (id, content, buttonLabel) => `
+      <pre id="${id}" style="
+        margin: 0 0 8px; padding: 12px; border-radius: 9px; overflow-x: auto; max-height: 230px;
+        background: ${isDarkMode ? '#0d0d0d' : '#f6f8fa'};
+        border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+        font: 11.5px/1.55 ui-monospace, monospace; color: ${isDarkMode ? '#d1d5db' : '#24292f'};
+        white-space: pre;
+      ">${escapeHtml(content)}</pre>
+      <button class="wz-copy" data-source="${id}" style="
+        padding: 8px 14px; border-radius: 7px; cursor: pointer; font: 600 12px system-ui;
+        border: none; background: ${theme.primary}; color: white; margin-bottom: 6px;
+      ">${buttonLabel}</button>`;
+
+    // Each step: title, body html, and an optional live check.
+    const steps = () => {
+      const platform = setupPlatform(state.platform);
+      const list = [];
+
+      const alreadyConfigured = remoteTargetConfigured();
+
+      list.push({
+        title: 'How should files reach your server?',
+        render: () => `
+          ${alreadyConfigured ? `
+            <div style="
+              display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+              padding: 12px 14px; border-radius: 10px;
+              background: ${isDarkMode ? '#0f2619' : '#f0fdf4'};
+              border: 1px solid ${isDarkMode ? 'rgba(34,197,94,0.3)' : '#bbf7d0'};
+            ">
+              <div style="flex: 1; font: 12px system-ui; line-height: 1.55; color: ${isDarkMode ? '#86efac' : '#047857'};">
+                You already have a working setup (<b>${escapeHtml(remoteTargetLabel() || 'configured')}</b>).
+                Running this wizard will replace it — your existing password is kept and shown, so you can
+                just step through, or test what you have instead.
+              </div>
+              <button id="wz-test-existing" style="
+                padding: 8px 14px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+                border: 1px solid ${isDarkMode ? 'rgba(34,197,94,0.4)' : '#86efac'};
+                background: transparent; color: ${isDarkMode ? '#86efac' : '#047857'}; font: 600 12px system-ui;
+              ">Test what I have</button>
+            </div>` : ''}
+          <p style="margin: 0 0 14px; color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; line-height: 1.6;">
+            Something on your server has to do the downloading. Pick whichever suits you —
+            you can change this later.
+          </p>
+          ${card('myjd', 'JDownloader &nbsp;·&nbsp; easiest',
+            'Nothing to configure on your network. No ports to open, works even when you are away from home. Install one app, sign in, done.',
+            state.transport === 'myjd')}
+          ${card('aria2', 'aria2 &nbsp;·&nbsp; advanced',
+            'Fastest and fully private — nothing leaves your network. Needs a container and one small script, and only works on your own network.',
+            state.transport === 'aria2')}
+        `,
+        onChoice: choice => { state.transport = choice; }
+      });
+
+      list.push({
+        title: 'What kind of server is it?',
+        render: () => Object.entries(SETUP_PLATFORMS).map(([key, value]) =>
+          card(key, value.label, value.mediaHint, state.platform === key)).join(''),
+        onChoice: choice => {
+          state.platform = choice;
+          const chosen = setupPlatform(choice);
+          if (!state.mediaPath) state.mediaPath = chosen.mediaHint;
+          if (!state.configPath) state.configPath = chosen.configHint;
+        }
+      });
+
+      if (state.transport === 'myjd') {
+        list.push({
+          title: `Install JDownloader on ${platform.label}`,
+          render: () => `
+            <ol style="margin: 0 0 14px; padding-left: 20px; line-height: 1.8; color: ${isDarkMode ? '#d1d5db' : '#374151'};">
+              ${platform.installJd.map(line => `<li>${line}</li>`).join('')}
+              <li>Inside JDownloader open <b>Settings → My.JDownloader</b> and sign in
+                  (free account at <code>my.jdownloader.org</code>).</li>
+            </ol>
+            <div style="padding: 11px 13px; border-radius: 9px; font: 12px system-ui; line-height: 1.6;
+              background: ${isDarkMode ? '#0f2619' : '#f0fdf4'}; color: ${isDarkMode ? '#86efac' : '#047857'};">
+              Nothing else to configure — no ports, no firewall rules. The next step just links your account.
+            </div>`
+        });
+
+        list.push({
+          title: 'Sign in to My.JDownloader',
+          render: () => `
+            ${field('wz-jd-email', 'Email', Settings.get('myjdEmail') || '', 'you@example.com')}
+            <div style="margin-bottom: 13px;">
+              <label style="display: block; font: 600 12px system-ui; margin-bottom: 5px;">Password</label>
+              <input type="password" id="wz-jd-pass" placeholder="${Settings.get('myjdLoginSecret') ? '•••••••• (saved)' : 'My.JDownloader password'}" style="
+                width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 8px;
+                border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;">
+              <div style="margin-top: 4px; font: 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">
+                Never stored — only the keys derived from it, which cannot be turned back into your password.
+              </div>
+            </div>
+            <div style="margin-bottom: 13px;">
+              <label style="display: block; font: 600 12px system-ui; margin-bottom: 5px;">JDownloader instance</label>
+              <select id="wz-jd-device" style="
+                width: 100%; padding: 9px 12px; border-radius: 8px;
+                border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;">
+                <option value="">— connect to load —</option>
+              </select>
+            </div>
+            <div style="margin-bottom: 6px;">
+              <label style="display: block; font: 600 12px system-ui; margin-bottom: 5px;">Where should files go?</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="wz-jd-dest"
+                  value="${escapeHtml(Settings.get('myjdDestination') || discoveredMediaRoot() || state.mediaPath || '')}"
+                  placeholder="${escapeHtml(discoveredMediaRoot() || platform.mediaHint)}" style="
+                    flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px;
+                    border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                    background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;">
+                <button id="wz-jd-browse" style="
+                  padding: 0 13px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+                  border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                  background: ${isDarkMode ? '#232323' : '#f9fafb'};
+                  color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;
+                ">Browse…</button>
+              </div>
+              <div style="margin-top: 4px; font: 11px system-ui; line-height: 1.5; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">
+                ${discoveredMediaRoot()
+                  ? `Pre-filled from your library at <code>${escapeHtml(discoveredMediaRoot())}</code>. If JDownloader runs in its own container it may mount the same storage at a different path — correct it here if so.`
+                  : 'The full path to your media library, as the JDownloader machine sees it. Connect your library first and this fills in automatically.'}
+              </div>
+            </div>`,
+          check: async () => {
+            const email = dialog.querySelector('#wz-jd-email').value.trim();
+            const password = dialog.querySelector('#wz-jd-pass').value;
+            const devices = password ? await myjdSignIn(email, password) : await myjdListDevices();
+            if (!devices.length) throw new Error('Signed in, but no JDownloader is linked to that account yet. Open JDownloader and sign in there first.');
+
+            const select = dialog.querySelector('#wz-jd-device');
+            select.innerHTML = devices.map(device =>
+              `<option value="${escapeHtml(device.id)}">${escapeHtml(device.name || device.id)}</option>`).join('');
+
+            Settings.set('myjdDeviceId', devices[0].id);
+            Settings.set('myjdDeviceName', devices[0].name || devices[0].id);
+            Settings.set('myjdDestination', dialog.querySelector('#wz-jd-dest').value.trim().replace(/\/+$/, ''));
+            Settings.set('remoteMethod', 'myjd');
+            return `Connected — found ${devices.length} instance(s). Using "${devices[0].name}".`;
+          }
+        });
+      } else {
+        list.push({
+          title: 'Tell me about your storage',
+          render: () => `
+            ${field('wz-media', 'Media library folder', state.mediaPath || platform.mediaHint, platform.mediaHint,
+              'The folder that already holds your Movies/Shows. Files land inside it.')}
+            ${field('wz-config', 'Folder for aria2 settings', state.configPath || platform.configHint, platform.configHint,
+              'Any empty folder — aria2 keeps its config here.')}
+            <div style="display: flex; gap: 10px;">
+              <div style="flex: 1;">${field('wz-uid', 'User ID', state.uid || platform.uid, platform.uid, platform.uidNote)}</div>
+              <div style="flex: 1;">${field('wz-gid', 'Group ID', state.gid || platform.gid, platform.gid, 'Must match your media server, or it cannot read the files.')}</div>
+            </div>
+            ${field('wz-port', 'Port', String(state.port), '6800', 'Leave 6800 unless something else uses it.')}
+            <div style="margin-bottom: 4px;">
+              <label style="display: block; font: 600 12px system-ui; margin-bottom: 5px;">Access password (RPC secret)</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="wz-secret" value="${escapeHtml(state.secret)}" style="
+                  flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px;
+                  border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                  background: ${isDarkMode ? '#111' : '#fff'}; color: inherit;
+                  font: 12px ui-monospace, monospace;">
+                <button id="wz-regen" style="
+                  padding: 0 13px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+                  border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                  background: ${isDarkMode ? '#232323' : '#f9fafb'};
+                  color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;
+                ">New</button>
+              </div>
+              <div style="margin-top: 4px; font: 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">
+                ${state.hadExistingSecret
+                  ? 'This is the secret you are already using — leave it alone unless you are reinstalling.'
+                  : 'Generated for you. <b>Already running aria2?</b> Paste your existing secret here instead, and skip the install step.'}
+              </div>
+            </div>`,
+          collect: () => {
+            state.mediaPath = dialog.querySelector('#wz-media').value.trim().replace(/\/+$/, '');
+            state.configPath = dialog.querySelector('#wz-config').value.trim().replace(/\/+$/, '');
+            state.uid = dialog.querySelector('#wz-uid').value.trim();
+            state.gid = dialog.querySelector('#wz-gid').value.trim();
+            state.port = parseInt(dialog.querySelector('#wz-port').value, 10) || 6800;
+            const secret = dialog.querySelector('#wz-secret').value.trim();
+            if (secret) state.secret = secret;
+          }
+        });
+
+        list.push({
+          title: 'Install it',
+          render: () => `
+            <p style="margin: 0 0 14px; color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; line-height: 1.6;">
+              Two ways to do this. The first is one paste and needs no further steps.
+            </p>
+
+            ${state.platform === 'truenas' ? `
+            <div style="
+              padding: 14px; border-radius: 11px; margin-bottom: 16px;
+              border: 2px solid ${theme.primary}; background: ${theme.primary}0f;
+            ">
+              <div style="font: 600 13px system-ui; margin-bottom: 4px;">Fully automatic &nbsp;·&nbsp; TrueNAS only</div>
+              <div style="font: 12px system-ui; line-height: 1.6; margin-bottom: 11px; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
+                PulseGrab installs everything for you — no terminal at all. Needs a TrueNAS API key
+                (Credentials → API Keys → Add).
+              </div>
+              ${field('wz-tn-url', 'TrueNAS address', state.truenasUrl || '', 'https://192.168.1.50')}
+              <div style="margin-bottom: 11px;">
+                <label style="display: block; font: 600 12px system-ui; margin-bottom: 5px;">API key</label>
+                <input type="password" id="wz-tn-key" placeholder="paste API key" autocomplete="new-password" style="
+                  width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 8px;
+                  border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                  background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;">
+                <div style="margin-top: 5px; font: 11px system-ui; line-height: 1.5; color: ${isDarkMode ? '#fcd34d' : '#92400e'};">
+                  This key can create containers as root, so PulseGrab <b>never saves it</b> — it is used
+                  for the install and then discarded. Delete it in TrueNAS afterwards if you like.
+                </div>
+              </div>
+              <button id="wz-tn-install" style="
+                width: 100%; padding: 11px; border-radius: 8px; cursor: pointer;
+                border: none; background: ${theme.gradient}; color: white; font: 600 13px system-ui;
+              ">Install it for me</button>
+              <div id="wz-tn-status" style="margin-top: 9px; font: 12px system-ui; line-height: 1.5;"></div>
+            </div>` : ''}
+
+            <div style="
+              padding: 14px; border-radius: 11px; margin-bottom: 16px;
+              border: 2px solid ${state.platform === 'truenas' ? (isDarkMode ? '#2a2a2a' : '#e5e7eb') : theme.primary};
+              background: ${state.platform === 'truenas' ? 'transparent' : `${theme.primary}0f`};
+            ">
+              <div style="font: 600 13px system-ui; margin-bottom: 4px;">One command &nbsp;·&nbsp; any server</div>
+              <div style="font: 12px system-ui; line-height: 1.6; margin-bottom: 10px; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
+                Paste this into a terminal on your server (SSH, or the TrueNAS/Unraid/Synology shell).
+                It creates everything, starts aria2, wires up the mover script and checks itself.
+              </div>
+              ${codeBlock('wz-install', wizardInstallCommand(state), 'Copy the command')}
+            </div>
+
+            <details>
+              <summary style="cursor: pointer; font: 600 13px system-ui; padding: 8px 0;">
+                Manual instead — do it through the ${escapeHtml(platform.label)} interface
+              </summary>
+              <div style="padding-top: 10px;">
+                <ol style="margin: 0 0 12px; padding-left: 20px; line-height: 1.8; color: ${isDarkMode ? '#d1d5db' : '#374151'};">
+                  ${platform.installAria2.map(line => `<li>${line}</li>`).join('')}
+                </ol>
+                ${codeBlock('wz-yaml', wizardComposeYaml(state), 'Copy the compose file')}
+                <p style="margin: 14px 0 8px; font: 12px system-ui; line-height: 1.6; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
+                  Then save this as <code>${escapeHtml(state.configPath)}/script/pulsegrab-move.sh</code>,
+                  <code>chmod 700</code> it, set
+                  <code>on-download-complete=/config/script/pulsegrab-move.sh</code> in
+                  <code>aria2.conf</code>, and restart.
+                  It must go in <code>script/</code> — the image resets permissions on <code>/config/*</code> at every start.
+                </p>
+                ${codeBlock('wz-hook', remoteHookScript(), 'Copy the mover script')}
+              </div>
+            </details>`
+        });
+
+        list.push({
+          title: 'Check it works',
+          render: () => `
+            ${field('wz-host', "Your server's address", state.installedHost || Settings.get('remoteHost') || '', '192.168.1.50',
+              'The hostname or IP of the machine running aria2.')}
+            <div style="padding: 11px 13px; border-radius: 9px; font: 12px system-ui; line-height: 1.6;
+              background: ${isDarkMode ? '#141414' : '#f9fafb'}; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
+              Port <b>${state.port}</b> and the secret from the compose file are used automatically.
+            </div>`,
+          check: async () => {
+            const host = dialog.querySelector('#wz-host').value.trim();
+            if (!host) throw new Error('Enter your server address first.');
+
+            // Snapshot first: a failed check must never leave a previously
+            // working configuration overwritten with values that don't work.
+            const previous = {
+              remoteHost: Settings.get('remoteHost'),
+              remotePort: Settings.get('remotePort'),
+              remoteSecret: Settings.get('remoteSecret'),
+              remoteLibraryDir: Settings.get('remoteLibraryDir'),
+              remoteMethod: Settings.get('remoteMethod'),
+              remoteSecure: Settings.get('remoteSecure')
+            };
+            const restore = () => Object.entries(previous)
+              .forEach(([key, value]) => Settings.set(key, value));
+
+            Settings.set('remoteHost', host);
+            Settings.set('remotePort', state.port);
+            Settings.set('remoteSecret', state.secret);
+            Settings.set('remoteLibraryDir', '/downloads');
+            Settings.set('remoteMethod', 'aria2');
+
+            let health;
+            try {
+              health = await testRemoteConnection();
+            } catch (error) {
+              restore();
+              if (/secret token/i.test(error.message) && previous.remoteSecret && previous.remoteSecret !== state.secret) {
+                throw new Error(
+                  'That secret was rejected — but you already had a working one saved, and it has been kept. '
+                  + 'If aria2 is already installed, go back a step and paste the secret it actually uses.'
+                );
+              }
+              throw error;
+            }
+            if (!health.hookInstalled) {
+              restore();
+              throw new Error(health.foreignHook
+                ? `aria2 is running, but its finish-script is "${health.foreignHook}" rather than PulseGrab's. Redo the previous step and restart the app.`
+                : 'aria2 is running, but the mover script is not wired up yet. Go back one step, then restart the app.');
+            }
+            return `aria2 ${health.version || ''} is running and the mover script is installed.`.trim();
+          }
+        });
+      }
+
+      list.push({
+        title: 'Connect your library (optional)',
+        render: () => `
+          <p style="margin: 0 0 13px; color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; line-height: 1.6;">
+            Point PulseGrab at your own Emby, Jellyfin or Plex and it reads your real library names,
+            so you can pick folders from a list instead of typing them.
+          </p>
+          ${field('wz-dest-url', 'Your media server address', Settings.get('destServerUrl') || '', 'http://192.168.1.50:8096')}
+          ${field('wz-dest-key', 'API key', Settings.get('destApiKey') || '', 'paste API key',
+            'Emby/Jellyfin → Dashboard → Advanced → API Keys. An admin key also unlocks folder browsing.')}`,
+        optional: true,
+        check: async () => {
+          const url = dialog.querySelector('#wz-dest-url').value.trim();
+          const key = dialog.querySelector('#wz-dest-key').value.trim();
+          if (!url || !key) throw new Error('Fill both fields, or press Skip.');
+
+          const info = await detectDestServer(url, null);
+          Settings.set('destServerUrl', info.url);
+          Settings.set('destServerType', info.type);
+          Settings.set('destApiKey', key);
+          Settings.set('destMediaRoot', '');
+
+          const libraries = await refreshDestLibraries();
+          const existing = (Settings.get('libraryFoldersExtra') || '').split(',').map(s => s.trim()).filter(Boolean);
+          Settings.set('libraryFoldersExtra',
+            [...new Set([...existing, ...libraries.map(library => library.folder)])].join(', '));
+          [['movie', 'libraryFolderMovies'], ['episode', 'libraryFolderShows'], ['audio', 'libraryFolderMusic']]
+            .forEach(([kind, settingKey]) => {
+              const match = libraries.find(library => library.type === kind);
+              if (match) Settings.set(settingKey, match.folder);
+            });
+
+          return `Found ${libraries.length} librar${libraries.length === 1 ? 'y' : 'ies'}: ${libraries.map(l => l.name).join(', ')}.`;
+        }
+      });
+
+      list.push({
+        title: "You're set up",
+        render: () => `
+          <div style="text-align: center; padding: 14px 0 6px;">
+            <div style="font-size: 44px; line-height: 1;">🎉</div>
+            <p style="margin: 14px 0 0; line-height: 1.7; color: ${isDarkMode ? '#d1d5db' : '#374151'};">
+              Open any Emby, Plex or Jellyfin server you have access to, click <b>Get Links</b>,
+              then <b>Send to My Server</b>. Files transfer directly from that server to yours —
+              you can close the browser.
+            </p>
+          </div>`,
+        finish: true
+      });
+
+      return list;
+    };
+
+    const render = () => {
+      const list = steps();
+      const step = list[Math.min(state.step, list.length - 1)];
+      const isLast = Boolean(step.finish);
+
+      dialog.innerHTML = `
+        <div style="padding: 20px 24px 14px; border-bottom: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            ${Icons.server}
+            <h3 style="margin: 0; font: 700 17px system-ui; flex: 1;">${step.title}</h3>
+            <button id="wz-close" style="
+              background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; border: none;
+              color: ${isDarkMode ? '#d1d5db' : '#374151'};
+              width: 26px; height: 26px; border-radius: 6px; cursor: pointer; line-height: 1;
+            ">&times;</button>
+          </div>
+          <div style="display: flex; gap: 4px; margin-top: 13px;">
+            ${list.map((_, index) => `<div style="
+              flex: 1; height: 3px; border-radius: 2px;
+              background: ${index <= state.step ? theme.primary : (isDarkMode ? '#2a2a2a' : '#e5e7eb')};
+            "></div>`).join('')}
+          </div>
+        </div>
+
+        <div style="padding: 20px 24px; overflow-y: auto; flex: 1;">${step.render()}</div>
+
+        <div id="wz-status" style="padding: 0 24px; font: 12px system-ui; line-height: 1.5;"></div>
+
+        <div style="display: flex; gap: 10px; padding: 16px 24px 20px;">
+          <button id="wz-back" style="
+            padding: 11px 18px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+            visibility: ${state.step === 0 ? 'hidden' : 'visible'};
+          ">Back</button>
+          <div style="flex: 1;"></div>
+          ${step.optional ? `<button id="wz-skip" style="
+            padding: 11px 18px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+          ">Skip</button>` : ''}
+          <button id="wz-next" style="
+            padding: 11px 26px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: none; background: ${theme.gradient}; color: white;
+          ">${isLast ? 'Done' : (step.check ? 'Check &amp; continue' : 'Continue')}</button>
+        </div>
+      `;
+
+      dialog.querySelector('#wz-close').addEventListener('click', close);
+
+      dialog.querySelectorAll('.wz-card').forEach(button => {
+        button.addEventListener('click', () => {
+          if (step.onChoice) step.onChoice(button.dataset.choice);
+          render();
+        });
+      });
+
+      dialog.querySelectorAll('.wz-copy').forEach(button => {
+        button.addEventListener('click', async () => {
+          const source = dialog.querySelector(`#${button.dataset.source}`);
+          await copyToClipboard(source.textContent);
+          const original = button.textContent;
+          button.textContent = 'Copied';
+          setTimeout(() => { button.textContent = original; }, 1600);
+        });
+      });
+
+      const tnUrlInput = dialog.querySelector('#wz-tn-url');
+      if (tnUrlInput) tnUrlInput.addEventListener('input', () => { state.truenasUrl = tnUrlInput.value; });
+
+      const tnInstall = dialog.querySelector('#wz-tn-install');
+      if (tnInstall) tnInstall.addEventListener('click', async () => {
+        const status = dialog.querySelector('#wz-tn-status');
+        const url = dialog.querySelector('#wz-tn-url').value.trim();
+        const key = dialog.querySelector('#wz-tn-key').value.trim();
+
+        if (!url || !key) {
+          status.innerHTML = '<span style="color:#ef4444;">Enter your TrueNAS address and an API key.</span>';
+          return;
+        }
+
+        // Held in memory for this install only — never written to storage.
+        const config = { url: destBaseCandidates(url)[0], key };
+        tnInstall.disabled = true;
+
+        try {
+          status.innerHTML = 'Connecting…';
+          const info = await truenasVerify(config);
+          status.innerHTML = `Connected to <b>${escapeHtml(info.hostname || 'TrueNAS')}</b> ${escapeHtml(info.version || '')}. Installing…`;
+
+          await truenasInstall(config, state, message => {
+            status.innerHTML = escapeHtml(message);
+          });
+
+          // We just installed to this address — don't make the user retype it.
+          try { state.installedHost = new URL(config.url).hostname; } catch (e) { /* keep unset */ }
+          status.innerHTML = '<span style="color:#10b981;">Installed and running. Press Continue to check the connection.</span>';
+        } catch (error) {
+          status.innerHTML = `<span style="color:#ef4444;">${escapeHtml(error.message)}</span>`;
+        } finally {
+          config.key = '';
+          tnInstall.disabled = false;
+        }
+      });
+
+      const jdBrowse = dialog.querySelector('#wz-jd-browse');
+      if (jdBrowse) jdBrowse.addEventListener('click', async () => {
+        const picked = await browseForFolder('', { absolute: true });
+        if (picked) dialog.querySelector('#wz-jd-dest').value = picked;
+      });
+
+      const testExisting = dialog.querySelector('#wz-test-existing');
+      if (testExisting) testExisting.addEventListener('click', async () => {
+        const status = dialog.querySelector('#wz-status');
+        testExisting.disabled = true;
+        testExisting.textContent = 'Testing…';
+        try {
+          if (remoteMethod() === 'myjd') {
+            const devices = await myjdListDevices();
+            status.innerHTML = `<span style="color:#10b981;">Your JDownloader is reachable (${devices.length} instance(s)). Nothing to change.</span>`;
+          } else {
+            const health = await testRemoteConnection();
+            status.innerHTML = health.hookInstalled
+              ? `<span style="color:#10b981;">Working already — aria2 ${escapeHtml(health.version || '')} with the mover script installed. You can close this.</span>`
+              : `<span style="color:#f59e0b;">aria2 answers, but the mover script is not wired up. Continue through the wizard to fix that.</span>`;
+          }
+        } catch (error) {
+          status.innerHTML = `<span style="color:#ef4444;">${escapeHtml(error.message)}</span>`;
+        }
+        testExisting.disabled = false;
+        testExisting.textContent = 'Test what I have';
+      });
+
+      const regen = dialog.querySelector('#wz-regen');
+      if (regen) regen.addEventListener('click', () => {
+        state.secret = randomSecret();
+        state.hadExistingSecret = false;
+        dialog.querySelector('#wz-secret').value = state.secret;
+      });
+
+      const back = dialog.querySelector('#wz-back');
+      if (back) back.addEventListener('click', () => {
+        if (step.collect) step.collect(); // don't lose typing when stepping back
+        state.step = Math.max(0, state.step - 1);
+        render();
+      });
+
+      const skip = dialog.querySelector('#wz-skip');
+      if (skip) skip.addEventListener('click', () => { state.step++; render(); });
+
+      dialog.querySelector('#wz-next').addEventListener('click', async () => {
+        const status = dialog.querySelector('#wz-status');
+        if (step.collect) step.collect();
+
+        if (isLast) {
+          close();
+          showNotification('Setup complete — PulseGrab is ready to transfer.', 'success', 5000);
+          return;
+        }
+
+        if (step.check) {
+          const button = dialog.querySelector('#wz-next');
+          button.disabled = true;
+          button.textContent = 'Checking…';
+          status.innerHTML = '';
+          try {
+            const message = await step.check();
+            status.innerHTML = `<span style="color:#10b981;">${escapeHtml(message)}</span>`;
+            setTimeout(() => { state.step++; render(); }, 900);
+            return;
+          } catch (error) {
+            status.innerHTML = `<span style="color:#ef4444;">${escapeHtml(error.message)}</span>`;
+            button.disabled = false;
+            button.innerHTML = 'Check &amp; continue';
+            return;
+          }
+        }
+
+        state.step++;
+        render();
+      });
+    };
+
+    overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    detachEscape = closeOnEscape(overlay, close);
+    render();
+  }
+
+  // ---------- Collision detection ----------
+  // Warn when a show already lives in a *different* library. Splitting a series
+  // across two libraries is the kind of mistake you only notice weeks later.
+  // Cached per library, not per title: one listing answers every title we need
+  // to check, instead of re-walking each library for each one.
+  const libraryListingCache = new Map();
+
+  async function listingFor(dest, library) {
+    if (libraryListingCache.has(library.path)) return libraryListingCache.get(library.path);
+    // Files matter as much as folders: plenty of libraries keep films loose in
+    // the library root rather than one folder per film.
+    const entries = await browseDestDirectory(dest, library.path, { includeFiles: true });
+    libraryListingCache.set(library.path, entries);
+    return entries;
+  }
+
+  const MEDIA_EXTENSIONS = /\.(mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|iso|mpg|mpeg|flv|webm|mp3|flac|m4a|ogg|wav)$/i;
+
+  // Strip everything that varies between how two people name the same title:
+  // extension, release tags, punctuation, case.
+  function titleTokens(value) {
+    return String(value || '')
+      .replace(MEDIA_EXTENSIONS, '')
+      .toLowerCase()
+      .replace(/[._\-[\]()]+/g, ' ')
+      .replace(/\b(1080p|720p|2160p|4k|bluray|blu ray|web ?dl|webrip|hdtv|x26[45]|h ?26[45]|hevc|aac|dts|ddp?5 1|remux|proper|repack|extended|multi|dual|dublado|legendado)\b/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  // Does `candidate` look like the same title as `target`? Every meaningful
+  // token of the target must be present, so "Dune 2021" won't match
+  // "Dune Part Two 2024" while "Dune.2021.1080p.BluRay.mkv" will.
+  function looksLikeSameTitle(target, candidate) {
+    const wanted = titleTokens(target);
+    if (!wanted.length) return false;
+    // Guard against one-letter titles matching half the library.
+    if (wanted.length === 1 && wanted[0].length < 3) {
+      return titleTokens(candidate).join(' ') === wanted[0];
+    }
+    const have = new Set(titleTokens(candidate));
+    return wanted.every(token => have.has(token));
+  }
+
+  // Which libraries already hold something that looks like this title, and what
+  // it's called there — reported so the user can see it's the same thing.
+  async function locationsHolding(title) {
+    const dest = resolveDestServer();
+    const libraries = cachedDestLibraries();
+    if (!dest || !libraries.length) return [];
+
+    const found = [];
+    for (const library of libraries) {
+      try {
+        const entries = await listingFor(dest, library);
+        const hit = entries.find(entry => looksLikeSameTitle(title, entry.name));
+        if (hit) found.push({ folder: library.folder, as: hit.name, isFile: hit.isFile });
+      } catch (error) {
+        // No browse permission, or the library moved — stay quiet rather than
+        // inventing warnings we can't substantiate.
+        logDebug('[Collision] could not inspect', library.folder, error.message);
+        return [];
+      }
+    }
+    return found;
+  }
+
+  // The top-level folder each item will create inside the destination, e.g.
+  // "Breaking Bad" for an episode, "Dune (2021)" for a film.
+  function targetFolderNamesFor(items, server, token) {
+    const names = new Set();
+    items.forEach(item => {
+      try {
+        const info = buildDownloadInfo(item, server, token);
+        const parts = (info.folderPath || '').split('/');
+        if (parts.length > 1) {
+          names.add(parts[1]);
+        } else if (info.displayName || info.filename) {
+          // Flat layout — there is no per-item folder, so the file itself is
+          // what we look for elsewhere in the library.
+          names.add(info.displayName || info.filename);
+        }
+      } catch (e) { /* skip anything we can't name */ }
+    });
+    return [...names];
+  }
+
+  // ---------- Folder browser dialog ----------
+  // Walks the destination server's real filesystem. Resolves to a folder path
+  // relative to the media root (what the downloader needs), or null if cancelled.
+  // `absolute: true` returns the full server-side path (e.g. /media/Filmes)
+  // rather than a path relative to the library root. JDownloader needs an
+  // absolute destination; aria2 works relative to its own mounted root.
+  function browseForFolder(startRelative = '', { absolute = false } = {}) {
+    return new Promise(resolve => {
+      const isDarkMode = Settings.get('darkMode');
+      const theme = getTheme();
+      const dest = resolveDestServer();
+      const mediaRoot = (Settings.get('destMediaRoot') || destMediaRoot(cachedDestLibraries()) || '').replace(/\/+$/, '');
+
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 2147483647;
+        display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
+      `;
+
+      const dialog = document.createElement('div');
+      dialog.style.cssText = `
+        width: 560px; max-width: calc(100vw - 40px); height: 560px; max-height: 88vh;
+        display: flex; flex-direction: column;
+        background: ${isDarkMode ? '#1c1c1c' : '#fff'}; border-radius: 14px; padding: 20px;
+        border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+        color: ${isDarkMode ? '#e5e7eb' : '#111827'}; font: 14px system-ui, sans-serif;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.45);
+      `;
+
+      dialog.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+          ${Icons.server}
+          <h3 style="margin: 0; font: 700 16px system-ui; flex: 1;">Choose a folder on your server</h3>
+          <button id="pg-br-close" style="
+            background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; border: none;
+            color: ${isDarkMode ? '#d1d5db' : '#374151'};
+            width: 26px; height: 26px; border-radius: 6px; cursor: pointer; line-height: 1;
+          ">&times;</button>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+          <button id="pg-br-up" style="
+            padding: 7px 12px; border-radius: 7px; cursor: pointer; font: 500 12px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+          ">↑ Up</button>
+          <button id="pg-br-new" style="
+            padding: 7px 12px; border-radius: 7px; cursor: pointer; font: 500 12px system-ui; white-space: nowrap;
+            border: 1px solid ${theme.primary}66; background: ${theme.primary}14; color: ${theme.primary};
+          ">+ New folder</button>
+          <div id="pg-br-path" style="
+            flex: 1; padding: 7px 12px; border-radius: 7px; overflow-x: auto; white-space: nowrap;
+            background: ${isDarkMode ? '#111' : '#f9fafb'};
+            border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+            font: 12px ui-monospace, monospace; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+          "></div>
+        </div>
+
+        <div id="pg-br-newrow" style="display: none; gap: 8px; margin-bottom: 10px;">
+          <input type="text" id="pg-br-newname" placeholder="Folder name, e.g. Documentaries" style="
+            flex: 1; min-width: 0; padding: 8px 12px; border-radius: 7px;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+            background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;
+          ">
+          <button id="pg-br-newok" style="
+            padding: 8px 14px; border-radius: 7px; cursor: pointer; font: 600 12px system-ui;
+            border: none; background: ${theme.primary}; color: white;
+          ">Create</button>
+          <button id="pg-br-newcancel" style="
+            padding: 8px 12px; border-radius: 7px; cursor: pointer; font: 500 12px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+          ">Cancel</button>
+        </div>
+
+        <div id="pg-br-list" style="
+          flex: 1; overflow-y: auto; border-radius: 8px; padding: 4px;
+          border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+          background: ${isDarkMode ? '#141414' : '#fff'};
+        "></div>
+
+        <div id="pg-br-note" style="
+          margin-top: 10px; font: 12px system-ui; line-height: 1.5;
+          color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+        "></div>
+
+        <div style="display: flex; gap: 10px; margin-top: 12px;">
+          <button id="pg-br-cancel" style="
+            flex: 1; padding: 11px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+          ">Cancel</button>
+          <button id="pg-br-pin" title="Pin to the top of every picker" style="
+            padding: 11px 15px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+          ">☆ Pin</button>
+          <button id="pg-br-pick" style="
+            flex: 2; padding: 11px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: none; background: ${theme.gradient}; color: white;
+          ">Use this folder</button>
+        </div>
+      `;
+
+      let current = startRelative ? `${mediaRoot}/${startRelative}` : mediaRoot;
+      // Folders the user invented here. They don't exist on disk yet — aria2 and
+      // JDownloader both create missing directories on the first write — so we
+      // must not try to list them, and we label them clearly.
+      const pendingCreate = new Set();
+
+      let detachEscape = () => {};
+      const close = value => { detachEscape(); overlay.remove(); resolve(value); };
+      detachEscape = closeOnEscape(overlay, () => close(null));
+      const listEl = () => dialog.querySelector('#pg-br-list');
+      const noteEl = () => dialog.querySelector('#pg-br-note');
+
+      const rowStyle = `
+        display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+        padding: 9px 11px; border: none; border-radius: 6px; cursor: pointer;
+        background: transparent; color: ${isDarkMode ? '#e5e7eb' : '#111827'};
+        font: 13px system-ui;
+      `;
+
+      // Libraries are always offered, even when browsing isn't permitted.
+      const renderLibraryShortcuts = () => {
+        const libraries = cachedDestLibraries();
+        if (!libraries.length) return '';
+        return `
+          <div style="padding: 6px 10px 4px; font: 600 11px system-ui; letter-spacing: .04em;
+            color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">YOUR LIBRARIES</div>
+          ${libraries.map(library => `
+            <button class="pg-br-lib" data-folder="${escapeHtml(library.folder)}" data-path="${escapeHtml(library.path || '')}" style="${rowStyle}">
+              <span style="color: ${theme.primary};">${Icons.server}</span>
+              <span style="flex: 1;">${escapeHtml(library.name)}</span>
+              <span style="font: 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">
+                ${CONTENT_KIND_LABELS[library.type] || 'Other'}
+              </span>
+            </button>
+          `).join('')}
+        `;
+      };
+
+      const render = async () => {
+        dialog.querySelector('#pg-br-path').textContent = current || '/';
+        refreshPinLabel();
+        listEl().innerHTML = `<div style="padding: 16px; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">Loading…</div>`;
+
+        if (pendingCreate.has(current)) {
+          listEl().innerHTML = `
+            <div style="padding: 20px 16px; text-align: center;">
+              <div style="font-size: 30px; line-height: 1;">📁</div>
+              <div style="margin-top: 10px; font: 600 13px system-ui;">${escapeHtml(current.split('/').pop())}</div>
+              <div style="margin-top: 5px; font: 12px system-ui; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
+                New folder — it will be created automatically when the first file lands here.
+              </div>
+            </div>`;
+          noteEl().textContent = absolute
+            ? `Selecting: ${current}`
+            : `Will be sent to: ${downloaderRoot()}/${destPathToRelative(current, mediaRoot)}`;
+          return;
+        }
+
+        if (!dest) {
+          listEl().innerHTML = renderLibraryShortcuts()
+            || `<div style="padding: 16px;">Connect your server in Settings → My Server to browse folders.</div>`;
+          noteEl().textContent = 'Not connected to your own server — showing saved libraries only.';
+          bindRows();
+          return;
+        }
+
+        try {
+          const entries = await browseDestDirectory(dest, current);
+          listEl().innerHTML = renderLibraryShortcuts() + `
+            <div style="padding: 10px 10px 4px; font: 600 11px system-ui; letter-spacing: .04em;
+              color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">FOLDERS IN ${escapeHtml(current || '/')}</div>
+            ${entries.length ? entries.map(entry => `
+              <button class="pg-br-dir" data-path="${escapeHtml(entry.path)}" style="${rowStyle}">
+                <span style="color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">📁</span>
+                <span style="flex: 1;">${escapeHtml(entry.name)}</span>
+                <span style="color: ${isDarkMode ? '#4b5563' : '#d1d5db'};">›</span>
+              </button>
+            `).join('') : `<div style="padding: 14px; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">No subfolders here.</div>`}
+          `;
+          noteEl().textContent = absolute
+            ? `Selecting: ${current}`
+            : `Will be sent to: ${downloaderRoot()}/${destPathToRelative(current, mediaRoot)}`;
+        } catch (error) {
+          listEl().innerHTML = renderLibraryShortcuts();
+          noteEl().innerHTML = `<span style="color:#ef4444;">${escapeHtml(error.message)}</span>`;
+        }
+        bindRows();
+      };
+
+      const bindRows = () => {
+        dialog.querySelectorAll('.pg-br-dir').forEach(button => {
+          button.addEventListener('click', () => { current = button.dataset.path; render(); });
+          button.addEventListener('mouseover', () => { button.style.background = isDarkMode ? '#232323' : '#f3f4f6'; });
+          button.addEventListener('mouseout', () => { button.style.background = 'transparent'; });
+        });
+        dialog.querySelectorAll('.pg-br-lib').forEach(button => {
+          button.addEventListener('click', () =>
+            close(absolute ? (button.dataset.path || button.dataset.folder) : button.dataset.folder));
+          button.addEventListener('mouseover', () => { button.style.background = isDarkMode ? '#232323' : '#f3f4f6'; });
+          button.addEventListener('mouseout', () => { button.style.background = 'transparent'; });
+        });
+      };
+
+      dialog.querySelector('#pg-br-up').addEventListener('click', () => {
+        if (!current || current === mediaRoot || current === '/') return;
+        current = current.replace(/\/[^/]+$/, '') || '/';
+        render();
+      });
+
+      const newRow = dialog.querySelector('#pg-br-newrow');
+      const newInput = dialog.querySelector('#pg-br-newname');
+
+      const commitNewFolder = () => {
+        const name = sanitizeFolderName(newInput.value);
+        if (!name || name.includes('/')) {
+          newInput.style.borderColor = '#ef4444';
+          noteEl().innerHTML = '<span style="color:#ef4444;">Enter a single folder name — no slashes or "..".</span>';
+          return;
+        }
+        current = `${current.replace(/\/+$/, '')}/${name}`;
+        pendingCreate.add(current);
+        newRow.style.display = 'none';
+        newInput.value = '';
+        render();
+      };
+
+      dialog.querySelector('#pg-br-new').addEventListener('click', () => {
+        newRow.style.display = 'flex';
+        newInput.style.borderColor = isDarkMode ? '#3f3f46' : '#d1d5db';
+        newInput.focus();
+      });
+      dialog.querySelector('#pg-br-newok').addEventListener('click', commitNewFolder);
+      dialog.querySelector('#pg-br-newcancel').addEventListener('click', () => {
+        newRow.style.display = 'none';
+        newInput.value = '';
+      });
+      newInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); commitNewFolder(); }
+        if (event.key === 'Escape') { newRow.style.display = 'none'; newInput.value = ''; }
+      });
+
+      const pinButton = dialog.querySelector('#pg-br-pin');
+      const refreshPinLabel = () => {
+        const relative = destPathToRelative(current, mediaRoot);
+        pinButton.innerHTML = relative && isPinned(relative) ? '★ Pinned' : '☆ Pin';
+      };
+      pinButton.addEventListener('click', () => {
+        const relative = destPathToRelative(current, mediaRoot);
+        if (!relative) {
+          noteEl().innerHTML = '<span style="color:#ef4444;">Pick a folder inside the library first.</span>';
+          return;
+        }
+        const nowPinned = togglePinned(relative);
+        refreshPinLabel();
+        noteEl().textContent = nowPinned
+          ? `"${relative}" will now appear first in every picker.`
+          : `"${relative}" unpinned.`;
+      });
+
+      dialog.querySelector('#pg-br-close').addEventListener('click', () => close(null));
+      dialog.querySelector('#pg-br-cancel').addEventListener('click', () => close(null));
+      overlay.addEventListener('click', event => { if (event.target === overlay) close(null); });
+
+      dialog.querySelector('#pg-br-pick').addEventListener('click', () => {
+        if (absolute) { close(current); return; }
+        const relative = destPathToRelative(current, mediaRoot);
+        if (!relative) {
+          noteEl().innerHTML = '<span style="color:#ef4444;">That is the library root — pick a folder inside it.</span>';
+          return;
+        }
+        close(relative);
+      });
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      render();
+    });
+  }
+
+  // ---------- Destination selection ----------
+  // buildDownloadInfo() sorts content into three top-level folders, but real
+  // libraries often have more than three (and rarely in English), so the target
+  // folder is chosen per content type at send time.
+  function contentKindOf(item) {
+    if (!item) return 'other';
+    if (item.Type === 'Movie') return 'movie';
+    if (item.Type === 'Episode') return 'episode';
+    if (item.Type === 'Audio') return 'audio';
+    return 'other';
+  }
+
+  const CONTENT_KIND_LABELS = {
+    movie: 'Movies',
+    episode: 'TV Episodes',
+    audio: 'Music',
+    other: 'Other items'
+  };
+
+  function defaultFolderForKind(kind) {
+    if (kind === 'movie') return Settings.get('libraryFolderMovies') || 'Movies';
+    if (kind === 'episode') return Settings.get('libraryFolderShows') || 'TV Shows';
+    if (kind === 'audio') return Settings.get('libraryFolderMusic') || 'Music';
+    return null; // 'other' keeps whatever the folder logic produced
+  }
+
+  function settingKeyForKind(kind) {
+    return { movie: 'libraryFolderMovies', episode: 'libraryFolderShows', audio: 'libraryFolderMusic' }[kind] || null;
+  }
+
+  // Every folder we can suggest: the three defaults plus any the user listed.
+  function knownLibraryFolders() {
+    const base = ['libraryFolderMovies', 'libraryFolderShows', 'libraryFolderMusic']
+      .map(key => Settings.get(key))
+      .filter(Boolean);
+    const extra = (Settings.get('libraryFoldersExtra') || '')
+      .split(',').map(name => name.trim()).filter(Boolean);
+    return [...new Set([...base, ...extra])];
+  }
+
+  // A folder name may nest ("Anime/Series") but must never climb out of the
+  // library root — the hook refuses those too, this is the first line.
+  function sanitizeFolderName(name) {
+    const clean = String(name == null ? '' : name).trim().replace(/^\/+|\/+$/g, '');
+    if (!clean) return null;
+    if (clean.split('/').some(part => part === '..' || part === '')) return null;
+    return clean;
+  }
+
+  // Swap the top-level folder of each task's relative path.
+  function applyDestinationOverrides(tasks, overrides) {
+    if (!overrides) return tasks;
+    return tasks.map(task => {
+      const target = overrides[task.contentKind];
+      if (!target) return task;
+
+      const parts = task.relativePath.split('/');
+      if (parts.length < 2) return task; // nothing but a filename — leave alone
+
+      const relativePath = [target, ...parts.slice(1)].join('/');
+      return { ...task, relativePath, options: { ...task.options, out: relativePath } };
+    });
+  }
+
+  // ---------- Shared target helpers ----------
+  function remoteMethod() {
+    return Settings.get('remoteMethod') === 'aria2' ? 'aria2' : 'myjd';
+  }
+
+  // Shown on the button so it's obvious where files are about to go.
+  function remoteTargetLabel() {
+    return remoteMethod() === 'aria2'
+      ? remoteHost()
+      : (Settings.get('myjdDeviceName') || '');
+  }
+
+  function remoteTargetConfigured() {
+    return remoteMethod() === 'aria2'
+      ? Boolean(remoteHost())
+      : Boolean(Settings.get('myjdDeviceId') && Settings.get('myjdDestination'));
+  }
+
+  // ---------- Platform knowledge for the setup wizard ----------
+  // Where each NAS keeps its storage, how you install a container on it, and the
+  // user/group its apps run as. Defaults, not gospel — every field is editable.
+  const SETUP_PLATFORMS = {
+    truenas: {
+      label: 'TrueNAS',
+      mediaHint: '/mnt/pool/media',
+      configHint: '/mnt/pool/apps/pulsegrab-aria2/config',
+      uid: '568', gid: '568',
+      uidNote: 'TrueNAS runs apps as the "apps" user, 568:568.',
+      installAria2: [
+        'Open <b>Apps → Discover Apps → Custom App</b>.',
+        'Choose <b>Install via YAML</b> and paste the file below.',
+        'Click Save. TrueNAS pulls the image and starts it.'
+      ],
+      installJd: [
+        'Open <b>Apps → Discover Apps</b> and search for <b>JDownloader2</b>.',
+        'Install it, then open its web UI from the app card.'
+      ]
+    },
+    unraid: {
+      label: 'Unraid',
+      mediaHint: '/mnt/user/media',
+      configHint: '/mnt/user/appdata/pulsegrab-aria2',
+      uid: '99', gid: '100',
+      uidNote: 'Unraid uses nobody:users, 99:100.',
+      installAria2: [
+        'Install the <b>Docker Compose Manager</b> plugin if you do not have it.',
+        'Add a new stack, paste the file below, and hit Compose Up.',
+        'Alternatively use <b>Docker → Add Container</b> with the same image, ports and paths.'
+      ],
+      installJd: [
+        'Open the <b>Apps</b> tab (Community Applications) and search <b>JDownloader2</b>.',
+        'Install the jlesage template, then open its web UI.'
+      ]
+    },
+    synology: {
+      label: 'Synology',
+      mediaHint: '/volume1/media',
+      configHint: '/volume1/docker/pulsegrab-aria2',
+      uid: '1026', gid: '100',
+      uidNote: 'Synology user IDs vary — check with `id youruser` over SSH.',
+      installAria2: [
+        'Open <b>Container Manager → Project → Create</b>.',
+        'Set the path, choose <b>Create docker-compose.yml</b> and paste the file below.',
+        'Click Next then Done.'
+      ],
+      installJd: [
+        'Open <b>Container Manager → Registry</b>, search <b>jlesage/jdownloader-2</b> and download it.',
+        'Run it, mapping port 5800 and your media folder.'
+      ]
+    },
+    docker: {
+      label: 'Plain Docker',
+      mediaHint: '/srv/media',
+      configHint: '/srv/pulsegrab-aria2/config',
+      uid: '1000', gid: '1000',
+      uidNote: 'Use the output of `id -u` and `id -g` for the user that owns your media.',
+      installAria2: [
+        'Save the file below as <code>docker-compose.yml</code>.',
+        'Run <code>docker compose up -d</code> in that folder.'
+      ],
+      installJd: [
+        'Run the jlesage/jdownloader-2 image, publishing port 5800 and mounting your media folder.',
+        'Open <code>http://your-host:5800</code> to reach its UI.'
+      ]
+    }
+  };
+
+  function setupPlatform(key) {
+    return SETUP_PLATFORMS[key] || SETUP_PLATFORMS.docker;
+  }
+
+  // The library root we learned from the user's own media server, if they have
+  // connected it. Far better than guessing "/mnt/pool/media".
+  function discoveredMediaRoot() {
+    const stored = (Settings.get('destMediaRoot') || '').trim();
+    if (stored) return stored.replace(/\/+$/, '');
+    // Cached entries carry `path`, not the `locations` array the live API
+    // returns — derive from those rather than handing them to destMediaRoot().
+    const paths = cachedDestLibraries().map(library => library.path).filter(Boolean);
+    return paths.length ? longestCommonPathPrefix(paths) : '';
+  }
+
+  // The aria2 config we install. Written up front rather than letting the image
+  // generate its own, because a config we control is the only way to guarantee
+  // our mover hook is the one wired up. Verified against p3terx/aria2-pro: an
+  // existing aria2.conf is left completely alone by its init scripts — which
+  // also means the RPC secret must be written here, since the RPC_SECRET
+  // environment variable is only applied to a config the image generates itself.
+  function pulsegrabAria2Conf(state) {
+    return `# Written by PulseGrab. Safe to edit.
+dir=/downloads
+continue=true
+max-concurrent-downloads=5
+max-connection-per-server=${Math.max(1, Math.min(16, parseInt(state.maxConnections, 10) || 1))}
+min-split-size=10M
+file-allocation=none
+disk-cache=32M
+auto-file-renaming=false
+allow-overwrite=true
+max-tries=5
+retry-wait=10
+
+# Keep the queue across restarts.
+input-file=/config/aria2.session
+save-session=/config/aria2.session
+save-session-interval=60
+
+enable-rpc=true
+rpc-listen-all=true
+rpc-allow-origin-all=true
+rpc-listen-port=${state.port}
+rpc-secret=${state.secret}
+
+# Moves finished files out of the staging folder into your library.
+on-download-complete=/config/script/pulsegrab-move.sh
+`;
+  }
+
+  // A single self-contained compose file: a throwaway init container writes the
+  // mover script and the config, then aria2 starts. Nothing to do afterwards —
+  // no chmod, no config editing, no restart.
+  function wizardComposeYaml(state) {
+    const platform = setupPlatform(state.platform);
+    const uid = state.uid || platform.uid;
+    const gid = state.gid || platform.gid;
+
+    // base64 so the script survives YAML, shells and any accents in the paths.
+    const hook64 = base64Utf8(remoteHookScript());
+    const conf64 = base64Utf8(pulsegrabAria2Conf(state));
+
+    return `services:
+  pulsegrab-init:
+    # Runs once, writes the two files aria2 needs, then exits.
+    image: busybox:1.36
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /config/script
+        echo '${hook64}' | base64 -d > /config/script/pulsegrab-move.sh
+        chmod 700 /config/script/pulsegrab-move.sh
+        if [ ! -f /config/aria2.conf ]; then
+          echo '${conf64}' | base64 -d > /config/aria2.conf
+        else
+          sed -i 's|^on-download-complete=.*|on-download-complete=/config/script/pulsegrab-move.sh|' /config/aria2.conf
+          grep -q '^on-download-complete=' /config/aria2.conf || \\
+            echo 'on-download-complete=/config/script/pulsegrab-move.sh' >> /config/aria2.conf
+        fi
+        chown -R ${uid}:${gid} /config
+        echo "PulseGrab: config ready"
+    volumes:
+      - ${yamlQuote(`${state.configPath}:/config`)}
+
+  aria2:
+    image: p3terx/aria2-pro
+    # No container_name on purpose: a fixed name collides with any other stack
+    # that already uses it, and compose addresses the service by name anyway.
+    restart: unless-stopped
+    depends_on:
+      pulsegrab-init:
+        condition: service_completed_successfully
+    environment:
+      # ${platform.uidNote}
+      - PUID=${uid}
+      - PGID=${gid}
+      - UMASK_SET=022
+      - ${yamlQuote(`RPC_SECRET=${state.secret}`)}
+      - ${yamlQuote(`RPC_PORT=${state.port}`)}
+      - UPDATE_TRACKERS=false
+    ports:
+      - "${state.port}:${state.port}"
+    volumes:
+      - ${yamlQuote(`${state.configPath}:/config`)}
+      # Left side: the folder holding your media library.
+      - ${yamlQuote(`${state.mediaPath}:/downloads`)}
+`;
+  }
+
+  // A single command the user pastes into any Linux/NAS shell. Creates the
+  // folders, writes the compose file and the mover script, starts the container
+  // and verifies itself. Works anywhere Docker runs — TrueNAS, Unraid, Synology,
+  // a Raspberry Pi, a VPS — so "one click" isn't limited to one vendor.
+  //
+  // The script is embedded base64-encoded: it travels through a shell, a YAML
+  // file and a heredoc unscathed regardless of quotes or accents in the paths.
+  function wizardInstallCommand(state) {
+    const compose = wizardComposeYaml(state);
+    const stack = state.configPath.replace(/\/+$/, '').replace(/\/[^/]+$/, '') || '/opt/pulsegrab-aria2';
+
+    return `# PulseGrab aria2 installer - paste this whole block into a shell on your server.
+set -e
+STACK=${shQuote(stack)}
+mkdir -p "$STACK" ${shQuote(state.configPath)} ${shQuote(state.mediaPath)}
+
+# The compose file writes its own config and mover script on first start,
+# so there is nothing to edit afterwards.
+echo ${shQuote(base64Utf8(compose))} | base64 -d > "$STACK/docker-compose.yml"
+
+cd "$STACK"
+docker compose up -d
+echo "waiting for aria2 to come up..."
+sleep 12
+
+if docker compose exec -T aria2 test -x /config/script/pulsegrab-move.sh 2>/dev/null; then
+  echo "OK: aria2 is running and the mover script is installed."
+else
+  echo "!! something went wrong - check: docker compose logs"
+fi
+
+echo
+echo "Now enter these in PulseGrab:"
+echo "   Server address : $(hostname -I 2>/dev/null | awk '{print $1}')"
+echo "   Port           : ${state.port}"
+echo "   RPC secret     : ${state.secret}"
+echo "   Library path   : /downloads"
+`;
+  }
+
+  // ---------- TrueNAS one-click install ----------
+  // Deploys the aria2 stack through the TrueNAS API so there is no shell step
+  // at all. Verified against TrueNAS 25.10: GET /system/info, GET /pool/dataset,
+  // GET /app, POST /app (custom_app + custom_compose_config_string) and
+  // POST /filesystem/mkdir.
+  //
+  // The API key is deliberately NEVER stored. It can create containers as root,
+  // so it lives in memory for the length of the install and is then gone. Ask
+  // again next time rather than keep something that powerful in browser storage.
+  async function truenasCall(config, method, path, body) {
+    const base = String(config.url || '').replace(/\/+$/, '');
+    const options = {
+      method,
+      headers: {
+        Authorization: `Bearer ${config.key}`,
+        Accept: 'application/json'
+      },
+      signal: { timeout: 45000 }
+    };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+
+    let response;
+    try {
+      response = await gmFetch(`${base}/api/v2.0${path}`, options);
+    } catch (error) {
+      throw new Error(`Could not reach TrueNAS at ${base} (${error.message}).`);
+    }
+
+    const text = await response.text();
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('TrueNAS rejected that API key. Create one under Credentials → API Keys.');
+    }
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try { detail = JSON.parse(text).message || detail; } catch (e) { /* keep status */ }
+      throw new Error(`TrueNAS said: ${detail}`);
+    }
+
+    try { return text ? JSON.parse(text) : null; } catch (e) { return text; }
+  }
+
+  // Every dataset with a real mountpoint, flattened and de-duplicated — the API
+  // returns children nested *and* repeated at the top level.
+  async function truenasDatasets(config) {
+    const roots = await truenasCall(config, 'GET', '/pool/dataset');
+    const seen = new Map();
+
+    const walk = nodes => (nodes || []).forEach(node => {
+      if (node && node.mountpoint && String(node.mountpoint).startsWith('/mnt')) {
+        seen.set(node.name, node.mountpoint);
+      }
+      walk(node && node.children);
+    });
+    walk(Array.isArray(roots) ? roots : []);
+
+    return [...seen.entries()]
+      .map(([name, mountpoint]) => ({ name, mountpoint }))
+      .sort((a, b) => a.mountpoint.localeCompare(b.mountpoint));
+  }
+
+  async function truenasVerify(config) {
+    const info = await truenasCall(config, 'GET', '/system/info');
+    return { hostname: info && info.hostname, version: info && info.version };
+  }
+
+  const TRUENAS_APP_NAME = 'pulsegrab-aria2';
+
+  async function truenasInstall(config, state, onProgress = () => {}) {
+    onProgress('Checking for an existing install…');
+    const apps = await truenasCall(config, 'GET', '/app');
+    if ((apps || []).some(app => app.name === TRUENAS_APP_NAME)) {
+      throw new Error(
+        `An app called "${TRUENAS_APP_NAME}" already exists on this server. `
+        + 'Delete it in Apps first, or go back and enter its details manually instead.'
+      );
+    }
+
+    onProgress('Creating the config folder…');
+    try {
+      await truenasCall(config, 'POST', '/filesystem/mkdir', { path: state.configPath });
+    } catch (error) {
+      // Already there is fine; anything else is worth surfacing.
+      if (!/exist/i.test(error.message)) throw error;
+    }
+
+    onProgress('Deploying aria2 — this pulls the image, give it a minute…');
+    await truenasCall(config, 'POST', '/app', {
+      custom_app: true,
+      app_name: TRUENAS_APP_NAME,
+      custom_compose_config_string: wizardComposeYaml(state)
+    });
+
+    // Creation is a background job, so poll the app rather than assume.
+    const deadline = Date.now() + 240000;
+    let state_ = null;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      try {
+        const app = await truenasCall(config, 'GET', `/app/id/${TRUENAS_APP_NAME}`);
+        state_ = app && app.state;
+        onProgress(`Deploying aria2 — ${String(state_ || 'starting').toLowerCase()}…`);
+        if (state_ === 'RUNNING') return { state: state_ };
+        if (state_ === 'CRASHED') {
+          throw new Error('The app was created but crashed on start. Check Apps → pulsegrab-aria2 → Logs on TrueNAS.');
+        }
+      } catch (error) {
+        if (/crashed/i.test(error.message)) throw error;
+        // 404 while the job is still running is expected; keep waiting.
+      }
+    }
+
+    throw new Error(`aria2 was created but hasn't reported as running yet (last state: ${state_ || 'unknown'}). Check Apps on TrueNAS.`);
+  }
+
+  function randomSecret() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const bytes = new Uint8Array(28);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map(byte => alphabet[byte % alphabet.length]).join('');
+  }
+
+  // ---------- Destination setup snippets ----------
+  // Generated from the user's own settings so the values always line up.
+
+  // A secret with a colon, '#', or quote in it would silently corrupt the YAML
+  // as a plain scalar, so emit user values as double-quoted strings.
+  function yamlQuote(value) {
+    return '"' + String(value == null ? '' : value)
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"') + '"';
+  }
+
+  function remoteComposeYaml() {
+    const port = Settings.get('remotePort') || CONFIG.remote.defaultPort;
+    const secret = Settings.get('remoteSecret') || 'change-me';
+    const library = (Settings.get('remoteLibraryDir') || '/downloads').replace(/\/+$/, '');
+
+    return `services:
+  aria2:
+    image: p3terx/aria2-pro
+    container_name: pulsegrab-aria2
+    restart: unless-stopped
+    environment:
+      # Match the user/group Emby runs as, or Emby won't be able to read the files.
+      # On TrueNAS the apps user is normally 568:568.
+      - PUID=568
+      - PGID=568
+      - UMASK_SET=022
+      - ${yamlQuote(`RPC_SECRET=${secret}`)}
+      - ${yamlQuote(`RPC_PORT=${port}`)}
+    ports:
+      - "${port}:${port}"
+    volumes:
+      - /mnt/tank/apps/aria2/config:/config
+      # Left side: the dataset holding your Emby library.
+      # Right side must match "Library path" in PulseGrab settings.
+      - ${yamlQuote(`/mnt/tank/media:${library}`)}
+`;
+  }
+
+  function remoteHookScript() {
+    const library = (Settings.get('remoteLibraryDir') || '/downloads').replace(/\/+$/, '');
+    const staging = remoteStagingRoot();
+
+    return `#!/usr/bin/env sh
+# PulseGrab — aria2 on-download-complete hook
+#
+# Save as /config/script/pulsegrab-move.sh inside the aria2 container, then set
+# this line in /config/aria2.conf:
+#
+#     on-download-complete=/config/script/pulsegrab-move.sh
+#
+# It must live in /config/script/ and NOT /config/. The p3terx image runs
+# 'chmod 600 /config/*' on every start, which would silently strip the execute
+# bit and leave downloads stranded in staging; /config/script/* is chmod 700
+# instead, so the script stays runnable across restarts.
+#
+# aria2 downloads into a dot-prefixed staging folder so Emby never indexes a
+# half-finished episode. This hook moves the finished file into the library.
+# Staging lives inside the library dataset, so the move is an atomic rename.
+#
+# SAFETY: this script never overwrites and never deletes anything inside your
+# library. If a file already exists at the destination the new copy is parked in
+# a conflicts folder instead, so nothing you already had can be replaced.
+#
+# After saving this file you MUST make it executable:
+#     chmod 700 /config/script/pulsegrab-move.sh
+# On TrueNAS a chmod from the host can silently fail to stick depending on the
+# dataset's ACL settings — verify with:
+#     docker exec <container> test -x /config/script/pulsegrab-move.sh && echo OK
+# aria2 logs "Could not execute user command ... Permission denied" if it isn't.
+
+STAGING=${shQuote(staging)}
+LIBRARY=${shQuote(library)}
+CONFLICTS="$STAGING/.conflicts"
+
+FILE="$3"
+[ -n "$FILE" ] || exit 0
+
+# Anything that didn't come from our staging folder isn't ours — hand it back to
+# the hook we displaced, untouched, so other users of this aria2 still work.
+case "$FILE" in
+  "$STAGING"/*) ;;
+  *)
+    for candidate in /config/script/clean.sh /root/.aria2/clean.sh /config/clean.sh; do
+      [ -x "$candidate" ] && exec "$candidate" "$1" "$2" "$3"
+    done
+    exit 0 ;;
+esac
+
+REL="\${FILE#$STAGING/}"
+
+# Refuse anything with a ".." segment or an absolute path: a crafted filename
+# must never be able to write outside the library.
+case "/$REL" in
+  */../*|*/..) echo "PulseGrab: refusing suspicious path: $REL" >&2; exit 1 ;;
+esac
+[ -n "$REL" ] || exit 1
+
+DEST="$LIBRARY/$REL"
+
+# NEVER clobber existing media. Park the new copy inside staging so neither the
+# old file nor the new one is lost, and the library is left exactly as it was.
+if [ -e "$DEST" ]; then
+  PARK="$CONFLICTS/$REL"
+  mkdir -p "$(dirname "$PARK")" 2>/dev/null || exit 1
+  mv -n "$FILE" "$PARK" 2>/dev/null
+  rm -f "$FILE.aria2"
+  echo "PulseGrab: '$DEST' already exists - left it alone, new copy parked at '$PARK'" >&2
+  exit 0
+fi
+
+mkdir -p "$(dirname "$DEST")" || exit 1
+# -n as a second line of defence: never clobber, even on a race.
+mv -n "$FILE" "$DEST" || exit 1
+
+rm -f "$FILE.aria2"
+
+# Prune empty directories ONLY inside staging. The library is never touched.
+find "$STAGING" -mindepth 1 -type d -empty -delete 2>/dev/null
+
+# Deliberately NOT chaining to the image's cleanup script here. It runs
+# DELETE_EXCLUDE_FILE and DELETE_EMPTY_DIR relative to the path it is handed,
+# and this file now lives in your media library - pointing it there could delete
+# real content (small files like subtitles, and "empty" folders).
+exit 0
+`;
+  }
+
+  // Escape closes the topmost dialog only — the folder browser opens on top of
+  // the destination picker, and closing both at once would lose the user's work.
+  // Capture phase so this wins over the global Escape handler.
+  function closeOnEscape(overlay, closeFn) {
+    overlay.dataset.pgOverlay = '1';
+    const handler = event => {
+      if (event.key !== 'Escape') return;
+      const stack = [...document.querySelectorAll('[data-pg-overlay="1"]')];
+      if (stack[stack.length - 1] !== overlay) return;
+      event.preventDefault();
+      event.stopPropagation();
+      document.removeEventListener('keydown', handler, true);
+      closeFn();
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
+  }
+
+  // The one place a server transfer actually happens: destination picker, then
+  // whichever transport is configured, then reporting. Both the "send all" and
+  // "choose what to send" paths go through here so they can't drift apart.
+  async function runServerTransfer(items, server, token, onLabel = () => {}) {
+    if (!remoteTargetConfigured()) {
+      showNotification('Let’s get your server set up first — this takes a couple of minutes.', 'info', 5000);
+      setTimeout(showSetupWizard, 220);
+      return false;
+    }
+
+    let overrides = null;
+    if (Settings.get('remoteAskDestination') !== false) {
+      overrides = await askRemoteDestination(items, server, token);
+      if (overrides === null) return false; // cancelled — nothing queued
+    }
+
+    try {
+      if (remoteMethod() === 'myjd') {
+        const result = await sendToMyJDownloader(items, server, token, onLabel, overrides);
+        const notes = [];
+        if (result.subtitleCount) notes.push(`${result.subtitleCount} subtitle file(s) included`);
+        if (result.unresolvable) notes.push(`${result.unresolvable} had no download URL`);
+        if (result.failures.length) notes.push(`${result.failures.length} package(s) failed — see console`);
+        showNotification(
+          `Sent ${result.sent} file(s) to ${remoteTargetLabel() || 'your JDownloader'}. Track progress in JDownloader or at my.jdownloader.org.`
+          + (notes.length ? ` ${notes.join('; ')}.` : ''),
+          result.failures.length ? 'warning' : 'success', 9000
+        );
+        return true;
+      }
+
+      const health = await testRemoteConnection();
+      if (!health.hookInstalled) {
+        showNotification(
+          health.foreignHook
+            ? `aria2's on-download-complete hook is "${health.foreignHook}", not PulseGrab's — finished files will stay in the staging folder. See Settings → My Server → Setup.`
+            : 'aria2 has no on-download-complete hook — finished files will stay in the staging folder instead of moving into your library. See Settings → My Server → Setup.',
+          'warning', 9000
+        );
+      }
+
+      const result = await sendToRemoteServer(items, server, token, onLabel, overrides);
+      const notes = [];
+      if (result.subtitleCount) notes.push(`${result.subtitleCount} subtitle file(s) included`);
+      if (result.alreadyQueued) notes.push(`${result.alreadyQueued} were already queued and skipped`);
+      if (result.unresolvable) notes.push(`${result.unresolvable} skipped with no download URL`);
+      if (result.rejected.length) notes.push(`${result.rejected.length} rejected by aria2 — see console`);
+
+      const problems = result.rejected.length || result.unresolvable || result.alreadyQueued;
+      showNotification(
+        `Queued ${result.accepted.length} file(s) — transferring straight to ${remoteHost()}.`
+        + (notes.length ? ` ${notes.join('; ')}.` : ''),
+        problems ? 'warning' : 'success', problems ? 9000 : 6000
+      );
+
+      if (Settings.get('remoteAutoStartPanel')) showRemoteTransferPanel(result.accepted);
+      return true;
+    } catch (error) {
+      showNotification(error.message, 'error', 10000);
+      return false;
+    }
+  }
+
+  // ---------- Server transfer: pick what to send ----------
+  // Deliberately separate from the Download Manager. That is a local-download
+  // engine — its Start/Selected/bulk buttons all pull files to this computer —
+  // so reusing it for server transfers made it far too easy to click the wrong
+  // thing and download everything locally. Nothing here touches downloadQueue.
+  function groupItemsForTransfer(items) {
+    const groups = new Map();
+
+    items.forEach(item => {
+      let groupName;
+      let sectionName;
+
+      if (item.Type === 'Episode') {
+        groupName = item.SeriesName || item.SeriesStudioName || 'Unknown series';
+        const season = item.ParentIndexNumber;
+        sectionName = item.SeasonName || (season !== undefined && season !== null ? `Season ${season}` : 'Episodes');
+      } else if (item.Type === 'Audio') {
+        groupName = item.AlbumArtist || (item.Artists && item.Artists[0]) || 'Unknown artist';
+        sectionName = item.Album || 'Tracks';
+      } else if (item.Type === 'Movie') {
+        groupName = 'Films';
+        sectionName = '';
+      } else {
+        groupName = item.Type ? `${item.Type}s` : 'Other';
+        sectionName = '';
+      }
+
+      if (!groups.has(groupName)) groups.set(groupName, new Map());
+      const sections = groups.get(groupName);
+      if (!sections.has(sectionName)) sections.set(sectionName, []);
+      sections.get(sectionName).push(item);
+    });
+
+    // Sort seasons naturally so "Season 2" precedes "Season 10".
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    return [...groups.entries()]
+      .sort((a, b) => collator.compare(a[0], b[0]))
+      .map(([name, sections]) => ({
+        name,
+        sections: [...sections.entries()]
+          .sort((a, b) => collator.compare(a[0], b[0]))
+          .map(([sectionName, sectionItems]) => ({
+            name: sectionName,
+            items: sectionItems.slice().sort((a, b) =>
+              collator.compare(labelForTransferItem(a), labelForTransferItem(b)))
+          }))
+      }));
+  }
+
+  function labelForTransferItem(item) {
+    if (item.Type === 'Episode') {
+      const episode = item.IndexNumber;
+      const prefix = episode !== undefined && episode !== null
+        ? `${String(episode).padStart(2, '0')}. ` : '';
+      return `${prefix}${item.Name || 'Episode'}`;
+    }
+    if (item.Type === 'Movie') {
+      return `${item.Name || 'Film'}${item.ProductionYear ? ` (${item.ProductionYear})` : ''}`;
+    }
+    return item.Name || 'Item';
+  }
+
+  function transferItemSize(item) {
+    return Number(item.Size || item.FileSize || 0) || 0;
+  }
+
+  // Resolves to the chosen items, or null if cancelled.
+  function showTransferSelection(items) {
+    return new Promise(resolve => {
+      const isDarkMode = Settings.get('darkMode');
+      const theme = getTheme();
+      const groups = groupItemsForTransfer(items);
+
+      // Everything starts ticked: the common case is "send it all, minus a few".
+      const chosen = new Set(items);
+      let query = '';
+
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 2147483647;
+        display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
+      `;
+
+      const dialog = document.createElement('div');
+      dialog.style.cssText = `
+        width: 660px; max-width: calc(100vw - 32px); height: 640px; max-height: 90vh;
+        display: flex; flex-direction: column; overflow: hidden;
+        background: ${isDarkMode ? '#1c1c1c' : '#fff'}; border-radius: 15px;
+        border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+        color: ${isDarkMode ? '#e5e7eb' : '#111827'}; font: 14px system-ui, sans-serif;
+        box-shadow: 0 22px 55px rgba(0,0,0,0.5);
+      `;
+
+      let detachEscape = () => {};
+      const close = value => { detachEscape(); overlay.remove(); resolve(value); };
+
+      dialog.innerHTML = `
+        <div style="padding: 18px 22px 14px; border-bottom: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            ${Icons.server}
+            <h3 style="margin: 0; font: 700 16px system-ui; flex: 1;">Choose what to send to your server</h3>
+            <button id="ts-close" style="
+              background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; border: none;
+              color: ${isDarkMode ? '#d1d5db' : '#374151'};
+              width: 26px; height: 26px; border-radius: 6px; cursor: pointer; line-height: 1;
+            ">&times;</button>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 12px;">
+            <input type="text" id="ts-search" placeholder="Search…" style="
+              flex: 1; min-width: 0; padding: 8px 12px; border-radius: 7px;
+              border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+              background: ${isDarkMode ? '#111' : '#fff'}; color: inherit; font: 13px system-ui;">
+            <button id="ts-all" style="
+              padding: 8px 12px; border-radius: 7px; cursor: pointer; font: 500 12px system-ui; white-space: nowrap;
+              border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+              background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+            ">Select all</button>
+            <button id="ts-none" style="
+              padding: 8px 12px; border-radius: 7px; cursor: pointer; font: 500 12px system-ui; white-space: nowrap;
+              border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+              background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+            ">Clear</button>
+          </div>
+        </div>
+
+        <div id="ts-body" style="flex: 1; overflow-y: auto; padding: 8px 12px;"></div>
+
+        <div style="
+          padding: 14px 22px 18px; border-top: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+          display: flex; align-items: center; gap: 12px;
+        ">
+          <div id="ts-summary" style="flex: 1; font: 12px system-ui; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};"></div>
+          <button id="ts-cancel" style="
+            padding: 11px 18px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+          ">Cancel</button>
+          <button id="ts-send" style="
+            padding: 11px 22px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: none; background: ${theme.gradient}; color: white;
+          ">Continue</button>
+        </div>
+      `;
+
+      const bodyEl = () => dialog.querySelector('#ts-body');
+
+      const visibleItems = () => {
+        if (!query) return items;
+        const needle = query.toLowerCase();
+        return items.filter(item =>
+          `${labelForTransferItem(item)} ${item.SeriesName || ''} ${item.Album || ''}`
+            .toLowerCase().includes(needle));
+      };
+
+      const rowStyle = (indent, bold) => `
+        display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+        padding: 7px 10px 7px ${indent}px; border: none; border-radius: 6px;
+        background: transparent; color: inherit; cursor: pointer;
+        font: ${bold ? '600' : '400'} 13px system-ui;
+      `;
+
+      const tick = state => state === 'all' ? '☑' : (state === 'some' ? '◪' : '☐');
+
+      const stateOf = list => {
+        const picked = list.filter(item => chosen.has(item)).length;
+        return picked === 0 ? 'none' : (picked === list.length ? 'all' : 'some');
+      };
+
+      const render = () => {
+        const allowed = new Set(visibleItems());
+        const html = groups.map((group, groupIndex) => {
+          const groupItems = group.sections.flatMap(section => section.items).filter(item => allowed.has(item));
+          if (!groupItems.length) return '';
+
+          const multiSection = group.sections.filter(section =>
+            section.items.some(item => allowed.has(item))).length > 1 || group.sections[0].name;
+
+          return `
+            <div style="margin-bottom: 6px;">
+              <button class="ts-group" data-group="${groupIndex}" style="${rowStyle(8, true)}">
+                <span style="font-size: 15px; color: ${theme.primary};">${tick(stateOf(groupItems))}</span>
+                <span style="flex: 1;">${escapeHtml(group.name)}</span>
+                <span style="font: 400 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">
+                  ${groupItems.filter(item => chosen.has(item)).length}/${groupItems.length}
+                </span>
+              </button>
+              ${group.sections.map((section, sectionIndex) => {
+                const sectionItems = section.items.filter(item => allowed.has(item));
+                if (!sectionItems.length) return '';
+                return `
+                  ${multiSection && section.name ? `
+                    <button class="ts-section" data-group="${groupIndex}" data-section="${sectionIndex}" style="${rowStyle(28, false)}">
+                      <span style="font-size: 14px; color: ${theme.primary};">${tick(stateOf(sectionItems))}</span>
+                      <span style="flex: 1; color: ${isDarkMode ? '#d1d5db' : '#374151'};">${escapeHtml(section.name)}</span>
+                      <span style="font: 400 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">
+                        ${sectionItems.filter(item => chosen.has(item)).length}/${sectionItems.length}
+                      </span>
+                    </button>` : ''}
+                  ${sectionItems.map(item => `
+                    <button class="ts-item" data-id="${escapeHtml(String(item.Id))}" style="${rowStyle(multiSection && section.name ? 50 : 28, false)}">
+                      <span style="font-size: 13px; color: ${chosen.has(item) ? theme.primary : (isDarkMode ? '#4b5563' : '#d1d5db')};">
+                        ${chosen.has(item) ? '☑' : '☐'}
+                      </span>
+                      <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                        color: ${isDarkMode ? '#9ca3af' : '#4b5563'};">${escapeHtml(labelForTransferItem(item))}</span>
+                      ${transferItemSize(item) ? `<span style="font: 400 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">${formatFileSize(transferItemSize(item))}</span>` : ''}
+                    </button>`).join('')}
+                `;
+              }).join('')}
+            </div>`;
+        }).join('');
+
+        bodyEl().innerHTML = html || `<div style="padding: 24px; text-align: center; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">Nothing matches that search.</div>`;
+
+        const picked = [...chosen];
+        const bytes = picked.reduce((sum, item) => sum + transferItemSize(item), 0);
+        dialog.querySelector('#ts-summary').textContent =
+          `${picked.length} of ${items.length} selected${bytes ? ` · ${formatFileSize(bytes)}` : ''}`;
+
+        const sendButton = dialog.querySelector('#ts-send');
+        sendButton.disabled = !picked.length;
+        sendButton.style.opacity = picked.length ? '1' : '0.5';
+        sendButton.textContent = picked.length ? `Continue with ${picked.length}` : 'Continue';
+
+        bind();
+      };
+
+      const toggleList = list => {
+        const state = stateOf(list);
+        list.forEach(item => { if (state === 'all') chosen.delete(item); else chosen.add(item); });
+        render();
+      };
+
+      const bind = () => {
+        const allowed = new Set(visibleItems());
+        dialog.querySelectorAll('.ts-group').forEach(button => {
+          button.addEventListener('click', () => {
+            const group = groups[Number(button.dataset.group)];
+            toggleList(group.sections.flatMap(section => section.items).filter(item => allowed.has(item)));
+          });
+        });
+        dialog.querySelectorAll('.ts-section').forEach(button => {
+          button.addEventListener('click', () => {
+            const section = groups[Number(button.dataset.group)].sections[Number(button.dataset.section)];
+            toggleList(section.items.filter(item => allowed.has(item)));
+          });
+        });
+        dialog.querySelectorAll('.ts-item').forEach(button => {
+          button.addEventListener('click', () => {
+            const item = items.find(candidate => String(candidate.Id) === button.dataset.id);
+            if (!item) return;
+            if (chosen.has(item)) chosen.delete(item); else chosen.add(item);
+            render();
+          });
+          button.addEventListener('mouseover', () => { button.style.background = isDarkMode ? '#232323' : '#f3f4f6'; });
+          button.addEventListener('mouseout', () => { button.style.background = 'transparent'; });
+        });
+      };
+
+      dialog.querySelector('#ts-search').addEventListener('input', event => {
+        query = event.target.value.trim();
+        render();
+      });
+      dialog.querySelector('#ts-all').addEventListener('click', () => {
+        visibleItems().forEach(item => chosen.add(item));
+        render();
+      });
+      dialog.querySelector('#ts-none').addEventListener('click', () => {
+        visibleItems().forEach(item => chosen.delete(item));
+        render();
+      });
+      dialog.querySelector('#ts-close').addEventListener('click', () => close(null));
+      dialog.querySelector('#ts-cancel').addEventListener('click', () => close(null));
+      dialog.querySelector('#ts-send').addEventListener('click', () => {
+        if (!chosen.size) return;
+        close(items.filter(item => chosen.has(item)));
+      });
+      overlay.addEventListener('click', event => { if (event.target === overlay) close(null); });
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      detachEscape = closeOnEscape(overlay, () => close(null));
+      render();
+    });
+  }
+
+  // ---------- Destination picker dialog ----------
+  // Resolves to a { contentKind: folderName } map, or null if cancelled.
+  function askRemoteDestination(items, server, token) {
+    return new Promise(resolve => {
+      const isDarkMode = Settings.get('darkMode');
+      const theme = getTheme();
+
+      // Only ask about the content types actually present in this batch.
+      const counts = {};
+      const byKind = {};
+      items.forEach(item => {
+        const kind = contentKindOf(item);
+        counts[kind] = (counts[kind] || 0) + 1;
+        (byKind[kind] = byKind[kind] || []).push(item);
+      });
+      const kinds = Object.keys(counts).filter(kind => defaultFolderForKind(kind));
+
+      // Work out the best starting folder per content type, and why, so the UI
+      // can explain itself. Explicit rules win, then where this exact show went
+      // last time, then the plain per-type default. Whatever wins is corrected
+      // for content type, so an "Anime" rule sends movies to the anime *movies*
+      // library and episodes to the anime *series* one.
+      const suggestion = {};
+      kinds.forEach(kind => {
+        const batch = byKind[kind] || [];
+        const rule = ruleFolderFor(batch);
+        if (rule) {
+          suggestion[kind] = { folder: folderForKind(rule, kind), reason: 'matched one of your rules' };
+          return;
+        }
+        const memory = rememberedFolderFor(batch);
+        if (memory) {
+          suggestion[kind] = { folder: folderForKind(memory, kind), reason: 'where you put it last time' };
+          return;
+        }
+        suggestion[kind] = { folder: defaultFolderForKind(kind), reason: '' };
+      });
+
+      if (!kinds.length) { resolve({}); return; }
+
+      const root = downloaderRoot();
+      const choices = destFolderChoices();
+      const suggestions = [...new Set([...choices.map(choice => choice.folder), ...knownLibraryFolders()])];
+
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+        z-index: 2147483647; display: flex; align-items: center; justify-content: center;
+        backdrop-filter: blur(4px);
+      `;
+
+      const dialog = document.createElement('div');
+      dialog.style.cssText = `
+        width: 540px; max-width: calc(100vw - 40px); max-height: 90vh; overflow-y: auto;
+        background: ${isDarkMode ? '#1c1c1c' : '#ffffff'};
+        border-radius: 14px; padding: 24px;
+        border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+        color: ${isDarkMode ? '#e5e7eb' : '#111827'};
+        font: 14px system-ui, sans-serif;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+      `;
+
+      dialog.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+          ${Icons.server}
+          <h3 style="margin: 0; font: 700 17px system-ui;">Where should these go?</h3>
+        </div>
+        <p style="margin: 0 0 18px; font: 13px system-ui; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
+          Pick the library folder for each kind of content. Type a new name to create one.
+        </p>
+
+        <datalist id="pg-folder-suggestions">
+          ${suggestions.map(name => `<option value="${escapeHtml(name)}"></option>`).join('')}
+        </datalist>
+
+        ${kinds.map(kind => {
+          // Libraries whose type matches this content go first — they're almost
+          // always what you want, and typing a path from memory is error-prone.
+          // Pinned first, then libraries whose type matches this content, then
+          // the rest, then anything recently used that isn't already listed.
+          const pinned = choices.filter(choice => isPinned(choice.folder));
+          const matching = choices.filter(choice => !isPinned(choice.folder) && choice.type === kind);
+          const others = choices.filter(choice => !isPinned(choice.folder) && choice.type !== kind);
+          const recents = recentDestinations().filter(folder =>
+            !choices.some(choice => choice.folder === folder));
+          return `
+          <div style="margin-bottom: 16px;">
+            <label style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+              <span style="font: 600 13px system-ui;">
+                ${CONTENT_KIND_LABELS[kind]}
+                ${suggestion[kind].reason ? `<span style="
+                  margin-left: 6px; padding: 2px 7px; border-radius: 999px; font: 500 10px system-ui;
+                  background: ${theme.primary}1a; color: ${theme.primary};
+                ">${escapeHtml(suggestion[kind].reason)}</span>` : ''}
+              </span>
+              <span style="font: 12px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">${counts[kind]} item${counts[kind] === 1 ? '' : 's'}</span>
+            </label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" list="pg-folder-suggestions" data-kind="${kind}"
+                value="${escapeHtml(suggestion[kind].folder)}"
+                style="
+                  flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px; box-sizing: border-box;
+                  border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                  background: ${isDarkMode ? '#111' : '#fff'};
+                  color: ${isDarkMode ? '#e5e7eb' : '#111827'}; font: 13px system-ui;
+                ">
+              <button class="pg-browse" data-kind="${kind}" style="
+                padding: 9px 13px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+                border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'};
+                background: ${isDarkMode ? '#232323' : '#f9fafb'};
+                color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;
+              ">Browse…</button>
+            </div>
+            ${(pinned.length || matching.length || others.length || recents.length) ? `
+              <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px;">
+                ${pinned.map(choice => `
+                  <button class="pg-chip" data-kind="${kind}" data-folder="${escapeHtml(choice.folder)}" style="
+                    padding: 4px 9px; border-radius: 999px; cursor: pointer; font: 600 11px system-ui;
+                    border: 1px solid ${theme.primary}; background: ${theme.primary}26; color: ${theme.primary};
+                  ">★ ${escapeHtml(choice.label)}</button>`).join('')}
+                ${matching.map(choice => `
+                  <button class="pg-chip" data-kind="${kind}" data-folder="${escapeHtml(choice.folder)}" style="
+                    padding: 4px 9px; border-radius: 999px; cursor: pointer; font: 500 11px system-ui;
+                    border: 1px solid ${theme.primary}66; background: ${theme.primary}1a; color: ${theme.primary};
+                  ">${escapeHtml(choice.label)}</button>`).join('')}
+                ${others.concat(recents.map(folder => ({ folder, label: folder }))).map(choice => `
+                  <button class="pg-chip" data-kind="${kind}" data-folder="${escapeHtml(choice.folder)}" style="
+                    padding: 4px 9px; border-radius: 999px; cursor: pointer; font: 500 11px system-ui;
+                    border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+                    background: transparent; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+                  ">${escapeHtml(choice.label)}</button>`).join('')}
+              </div>` : ''}
+            <div class="pg-preview" data-kind="${kind}" style="
+              margin-top: 6px; font: 11px ui-monospace, monospace; word-break: break-all;
+              color: ${isDarkMode ? '#6b7280' : '#9ca3af'};
+            "></div>
+          </div>`;
+        }).join('')}
+
+        <div id="pg-collisions" style="
+          display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 9px;
+          font: 12px system-ui; line-height: 1.55;
+          background: ${isDarkMode ? '#2a1f0f' : '#fffbeb'};
+          color: ${isDarkMode ? '#fcd34d' : '#92400e'};
+          border: 1px solid ${isDarkMode ? 'rgba(245,158,11,0.3)' : '#fde68a'};
+        "></div>
+
+        <div style="
+          margin-top: 4px; padding: 10px 12px; border-radius: 9px;
+          background: ${isDarkMode ? '#141414' : '#f9fafb'};
+          border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+        ">
+          <div style="font: 600 12px system-ui; margin-bottom: 7px;">Apply to</div>
+          <label style="display: flex; align-items: center; gap: 8px; font: 13px system-ui; cursor: pointer; margin-bottom: 5px;">
+            <input type="radio" name="pg-scope" value="once"> Just this transfer
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; font: 13px system-ui; cursor: pointer;">
+            <input type="radio" name="pg-scope" value="default" checked> Save as my default for these types
+          </label>
+        </div>
+
+        <div style="
+          margin-top: 14px; padding: 9px 12px; border-radius: 8px; font: 12px system-ui; line-height: 1.5;
+          background: ${isDarkMode ? '#0f2619' : '#f0fdf4'};
+          color: ${isDarkMode ? '#86efac' : '#047857'};
+        ">
+          Existing files are never overwritten — if something is already there, the new copy is
+          parked in a conflicts folder and your library is left untouched.
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 18px;">
+          <button id="pg-dest-cancel" style="
+            flex: 1; padding: 11px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+          ">Cancel</button>
+          <button id="pg-dest-send" style="
+            flex: 2; padding: 11px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
+            border: none; background: ${theme.gradient}; color: white;
+          ">Send to My Server</button>
+        </div>
+      `;
+
+      const inputs = () => [...dialog.querySelectorAll('input[data-kind]')];
+
+      const refreshPreviews = () => {
+        let allValid = true;
+        inputs().forEach(input => {
+          const folder = sanitizeFolderName(input.value);
+          const preview = dialog.querySelector(`.pg-preview[data-kind="${input.dataset.kind}"]`);
+          if (!folder) {
+            allValid = false;
+            input.style.borderColor = '#ef4444';
+            preview.textContent = 'Enter a folder name (".." is not allowed).';
+            preview.style.color = '#ef4444';
+          } else {
+            input.style.borderColor = isDarkMode ? '#3f3f46' : '#d1d5db';
+            preview.textContent = `${root.replace(/\/+$/, '')}/${folder}/…`;
+            preview.style.color = isDarkMode ? '#6b7280' : '#9ca3af';
+          }
+        });
+        dialog.querySelector('#pg-dest-send').disabled = !allValid;
+        dialog.querySelector('#pg-dest-send').style.opacity = allValid ? '1' : '0.5';
+      };
+
+      let collisionTimer = null;
+      const scheduleCollisionCheck = () => {
+        clearTimeout(collisionTimer);
+        collisionTimer = setTimeout(() => { runCollisionCheck().catch(() => {}); }, 400);
+      };
+      inputs().forEach(input => input.addEventListener('input', () => {
+        refreshPreviews();
+        scheduleCollisionCheck();
+      }));
+
+      // Look for these titles elsewhere in the library and say so, rather than
+      // silently scattering a series across two folders.
+      const runCollisionCheck = async () => {
+        const box = dialog.querySelector('#pg-collisions');
+        if (!box || !resolveDestServer()) return;
+
+        const warnings = [];
+        for (const kind of kinds) {
+          const chosen = sanitizeFolderName(
+            (dialog.querySelector(`input[data-kind="${kind}"]`) || {}).value);
+          if (!chosen) continue;
+
+          const names = targetFolderNamesFor(byKind[kind] || [], server, token).slice(0, 4);
+          for (const name of names) {
+            const hits = await locationsHolding(name);
+            const elsewhere = hits.filter(hit => hit.folder !== chosen);
+            const here = hits.find(hit => hit.folder === chosen);
+
+            if (here) {
+              warnings.push(`<b>${escapeHtml(name)}</b> is already in <b>${escapeHtml(here.folder)}</b>`
+                + (here.as !== name ? ` as <i>${escapeHtml(here.as)}</i>` : '')
+                + ' — existing files will not be touched.');
+            } else if (elsewhere.length) {
+              warnings.push(`<b>${escapeHtml(name)}</b> already exists in <b>`
+                + escapeHtml(elsewhere.map(hit => hit.folder).join(', ')) + '</b>'
+                + (elsewhere[0].as !== name ? ` as <i>${escapeHtml(elsewhere[0].as)}</i>` : ''));
+            }
+          }
+        }
+
+        if (!warnings.length) { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        box.innerHTML = `
+          <div style="font: 600 12px system-ui; margin-bottom: 5px;">Already on your server</div>
+          ${warnings.slice(0, 4).map(text => `<div style="margin-bottom: 2px;">${text}</div>`).join('')}
+          <div style="margin-top: 6px; opacity: .85;">
+            Sending elsewhere will split it across libraries. Existing files are never overwritten either way.
+          </div>`;
+      };
+
+      const setFolder = (kind, folder) => {
+        const input = dialog.querySelector(`input[data-kind="${kind}"]`);
+        if (input) { input.value = folder; refreshPreviews(); }
+      };
+
+      dialog.querySelectorAll('.pg-chip').forEach(chip => {
+        chip.addEventListener('click', () => setFolder(chip.dataset.kind, chip.dataset.folder));
+      });
+
+      dialog.querySelectorAll('.pg-browse').forEach(button => {
+        button.addEventListener('click', async () => {
+          const kind = button.dataset.kind;
+          const current = dialog.querySelector(`input[data-kind="${kind}"]`);
+          const picked = await browseForFolder(sanitizeFolderName(current ? current.value : '') || '');
+          if (picked) setFolder(kind, picked);
+        });
+      });
+
+      let detachEscape = () => {};
+      const close = result => { detachEscape(); overlay.remove(); resolve(result); };
+      detachEscape = closeOnEscape(overlay, () => close(null));
+
+      dialog.querySelector('#pg-dest-cancel').addEventListener('click', () => close(null));
+      overlay.addEventListener('click', event => { if (event.target === overlay) close(null); });
+
+      dialog.querySelector('#pg-dest-send').addEventListener('click', () => {
+        const overrides = {};
+        let valid = true;
+
+        inputs().forEach(input => {
+          const folder = sanitizeFolderName(input.value);
+          if (!folder) { valid = false; return; }
+          overrides[input.dataset.kind] = folder;
+        });
+        if (!valid) { refreshPreviews(); return; }
+
+        const scope = dialog.querySelector('input[name="pg-scope"]:checked');
+        if (scope && scope.value === 'default') {
+          Object.entries(overrides).forEach(([kind, folder]) => {
+            const key = settingKeyForKind(kind);
+            if (key) Settings.set(key, folder);
+          });
+          // Keep anything newly typed in the suggestion list for next time.
+          const known = new Set(knownLibraryFolders());
+          const additions = Object.values(overrides).filter(folder => !known.has(folder));
+          if (additions.length) {
+            const existing = (Settings.get('libraryFoldersExtra') || '').split(',').map(s => s.trim()).filter(Boolean);
+            Settings.set('libraryFoldersExtra', [...new Set([...existing, ...additions])].join(', '));
+          }
+        }
+
+        // Always learn where these particular shows went, regardless of whether
+        // the user also chose to change their global default.
+        Object.entries(overrides).forEach(([kind, folder]) => {
+          rememberFolderForItems(byKind[kind] || [], folder);
+        });
+
+        Object.values(overrides).forEach(rememberDestination);
+        close(overrides);
+      });
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      refreshPreviews();
+      inputs()[0].focus();
+      runCollisionCheck().catch(() => {});
+    });
+  }
+
+  // ---------- Live Server Transfer Panel ----------
+  // Polls aria2 for the GIDs we queued. Terminal states are cached locally so a
+  // 500-file transfer doesn't re-request the whole set every two seconds.
+  let remoteTransferPanel = null;
+
+  function makeTransferState(entry) {
+    return {
+      name: entry.task.displayName,
+      path: entry.task.relativePath,
+      kind: entry.task.kind,
+      // Only media tasks carry an item; subtitles must not create their own
+      // history entries or they'd shadow the video's.
+      item: entry.task.item || null,
+      recorded: false,
+      status: 'waiting',
+      completedLength: 0,
+      totalLength: 0,
+      downloadSpeed: 0,
+      errorMessage: null
+    };
+  }
+
+  function showRemoteTransferPanel(queued) {
+    // Sending a second batch while one is still running should join the open
+    // panel — replacing it would orphan the first transfer's progress even
+    // though aria2 is still working on it.
+    if (remoteTransferPanel && document.body.contains(remoteTransferPanel.element)) {
+      remoteTransferPanel.addEntries(queued);
+      return;
+    }
+
+    const isDarkMode = Settings.get('darkMode');
+    const theme = getTheme();
+
+    const tracked = new Map();
+    queued.forEach(entry => {
+      if (entry.gid) tracked.set(entry.gid, makeTransferState(entry));
+    });
+
+    // Written as each file lands rather than in one batch at the end, so a
+    // transfer the user closes the tab on still records what actually arrived.
+    const recordCompleted = () => {
+      const landed = [...tracked.values()]
+        .filter(state => state.status === 'complete' && state.item && !state.recorded);
+      if (!landed.length) return;
+
+      landed.forEach(state => { state.recorded = true; });
+      try {
+        DownloadHistory.mark(landed.map(state => state.item));
+      } catch (e) {
+        logDebug('[MyServer] Could not write download history:', e.message);
+      }
+    };
+
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+      position: fixed; bottom: 20px; right: 20px; width: 380px; max-width: calc(100vw - 40px);
+      z-index: 2147483646; border-radius: 14px; overflow: hidden;
+      background: ${isDarkMode ? '#1c1c1c' : '#ffffff'};
+      border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+      box-shadow: 0 12px 34px rgba(0,0,0,${isDarkMode ? '0.55' : '0.18'});
+      font: 13px system-ui, sans-serif; color: ${isDarkMode ? '#e5e7eb' : '#111827'};
+    `;
+
+    panel.innerHTML = `
+      <div style="
+        display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+        background: ${theme.gradient}; color: white; font: 600 14px system-ui;
+      ">
+        ${Icons.server || Icons.download}
+        <span style="flex: 1;">Transferring to your server</span>
+        <button id="pg-remote-close" title="Hide panel" style="
+          background: rgba(255,255,255,0.18); border: none; color: white;
+          width: 24px; height: 24px; border-radius: 6px; cursor: pointer; line-height: 1;
+        ">&times;</button>
+      </div>
+
+      <div style="padding: 14px;">
+        <div id="pg-remote-summary" style="
+          display: flex; justify-content: space-between; align-items: baseline;
+          margin-bottom: 8px; font: 500 12px system-ui;
+          color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+        ">
+          <span id="pg-remote-counts">Starting…</span>
+          <span id="pg-remote-speed"></span>
+        </div>
+
+        <div style="
+          height: 8px; border-radius: 4px; overflow: hidden;
+          background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'};
+        ">
+          <div id="pg-remote-bar" style="
+            height: 100%; width: 0%; border-radius: 4px;
+            background: ${theme.gradient}; transition: width 0.4s ease;
+          "></div>
+        </div>
+
+        <div id="pg-remote-active" style="
+          margin-top: 12px; display: flex; flex-direction: column; gap: 6px;
+          max-height: 168px; overflow-y: auto;
+        "></div>
+
+        <div id="pg-remote-errors" style="
+          margin-top: 10px; display: none; padding: 8px 10px; border-radius: 6px;
+          background: ${isDarkMode ? '#2a1215' : '#fef2f2'};
+          border-left: 3px solid #ef4444;
+          color: ${isDarkMode ? '#fca5a5' : '#b91c1c'};
+          font: 12px system-ui; max-height: 90px; overflow-y: auto;
+        "></div>
+
+        <div style="margin-top: 12px; display: flex; gap: 8px;">
+          <button id="pg-remote-cancel" style="
+            flex: 1; padding: 8px; border-radius: 7px; cursor: pointer;
+            border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
+            background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
+            font: 500 12px system-ui;
+          ">Cancel remaining</button>
+        </div>
+
+        <div style="
+          margin-top: 10px; font: 11px system-ui;
+          color: ${isDarkMode ? '#6b7280' : '#9ca3af'}; line-height: 1.5;
+        ">
+          Files transfer directly from the source server to
+          <strong>${remoteHost()}</strong>. You can close this tab — the transfer keeps running.
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+
+    let pollTimer = null;
+    // A poll can already be awaiting aria2 when the panel is closed; without this
+    // flag it would reschedule itself and keep a timer alive on a detached node.
+    let closed = false;
+
+    // Guards against two poll loops running at once: pollTimer is null both
+    // between cycles *and* while a request is in flight, so it can't be used
+    // to decide whether the loop is already alive.
+    let loopActive = false;
+
+    const closePanel = () => {
+      closed = true;
+      loopActive = false;
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      panel.remove();
+      if (remoteTransferPanel && remoteTransferPanel.element === panel) remoteTransferPanel = null;
+    };
+
+    panel.querySelector('#pg-remote-close').addEventListener('click', closePanel);
+
+    panel.querySelector('#pg-remote-cancel').addEventListener('click', async () => {
+      const pending = [...tracked.entries()]
+        .filter(([, state]) => ['active', 'waiting', 'paused'].includes(state.status))
+        .map(([gid]) => gid);
+
+      if (!pending.length) { closePanel(); return; }
+
+      try {
+        await aria2Call('system.multicall', [pending.map(gid => ({
+          methodName: 'aria2.forceRemove',
+          params: remoteParams([gid])
+        }))]);
+        showNotification(`Cancelled ${pending.length} pending transfer(s).`, 'success');
+      } catch (error) {
+        showNotification(`Could not cancel: ${error.message}`, 'error');
+      }
+      closePanel();
+    });
+
+    const TERMINAL = ['complete', 'error', 'removed'];
+
+    const render = () => {
+      const states = [...tracked.values()];
+      const done = states.filter(s => s.status === 'complete').length;
+      const failed = states.filter(s => s.status === 'error').length;
+      const active = states.filter(s => s.status === 'active');
+
+      const speed = active.reduce((sum, s) => sum + (Number(s.downloadSpeed) || 0), 0);
+
+      // Queued items report totalLength 0 until aria2 actually starts them, so a
+      // straight bytes-done/bytes-total ratio would spike to ~100% on the first
+      // file and then collapse as the rest reveal their sizes. Weight by file
+      // instead: each finished file counts 1, each in-flight file counts its own
+      // fraction. Monotonic, and honest about how much is left.
+      const fileProgress = states.reduce((sum, s) => {
+        if (TERMINAL.includes(s.status)) return sum + 1;
+        const total = Number(s.totalLength) || 0;
+        return sum + (total > 0 ? Math.min(1, Number(s.completedLength) / total) : 0);
+      }, 0);
+      const percent = states.length ? (fileProgress / states.length) * 100 : 0;
+
+      // Extrapolate the unknown sizes from the ones we've seen so the ETA covers
+      // the whole queue rather than just the files already in flight.
+      const sized = states.filter(s => Number(s.totalLength) > 0);
+      const averageSize = sized.length
+        ? sized.reduce((sum, s) => sum + Number(s.totalLength), 0) / sized.length
+        : 0;
+      const estimatedTotal = states.reduce((sum, s) => sum + (Number(s.totalLength) || averageSize), 0);
+      const doneBytes = states.reduce((sum, s) => sum + (Number(s.completedLength) || 0), 0);
+
+      panel.querySelector('#pg-remote-bar').style.width = `${percent.toFixed(1)}%`;
+      panel.querySelector('#pg-remote-counts').textContent =
+        `${done} of ${states.length} done${failed ? ` · ${failed} failed` : ''}`;
+
+      const speedEl = panel.querySelector('#pg-remote-speed');
+      if (speed > 0) {
+        const remaining = estimatedTotal - doneBytes;
+        const eta = remaining > 0 ? formatDuration(remaining / speed) : '';
+        speedEl.textContent = `${formatFileSize(speed)}/s${eta ? ` · ${eta} left` : ''}`;
+      } else {
+        speedEl.textContent = '';
+      }
+
+      panel.querySelector('#pg-remote-active').innerHTML = active.slice(0, 4).map(s => {
+        const itemPercent = Number(s.totalLength) > 0
+          ? ((Number(s.completedLength) / Number(s.totalLength)) * 100).toFixed(0)
+          : 0;
+        return `
+          <div style="font: 12px system-ui;">
+            <div style="
+              display: flex; justify-content: space-between; gap: 8px; margin-bottom: 3px;
+            ">
+              <span style="
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                color: ${isDarkMode ? '#d1d5db' : '#374151'};
+              ">${escapeHtml(s.name)}</span>
+              <span style="color: ${isDarkMode ? '#6b7280' : '#9ca3af'}; flex-shrink: 0;">${itemPercent}%</span>
+            </div>
+            <div style="height: 3px; border-radius: 2px; background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'};">
+              <div style="height: 100%; width: ${itemPercent}%; border-radius: 2px; background: ${theme.primary};"></div>
+            </div>
+          </div>`;
+      }).join('') + (active.length > 4
+        ? `<div style="font: 11px system-ui; color: ${isDarkMode ? '#6b7280' : '#9ca3af'};">+ ${active.length - 4} more transferring</div>`
+        : '');
+
+      const errored = states.filter(s => s.status === 'error');
+      const errorBox = panel.querySelector('#pg-remote-errors');
+      if (errored.length) {
+        errorBox.style.display = 'block';
+        errorBox.innerHTML = errored.slice(0, 5).map(s =>
+          `<div><strong>${escapeHtml(s.name)}</strong> — ${escapeHtml(s.errorMessage || 'failed')}</div>`
+        ).join('') + (errored.length > 5 ? `<div>+ ${errored.length - 5} more</div>` : '');
+      } else {
+        errorBox.style.display = 'none';
+      }
+
+      return { done, failed, finished: done + failed === states.length };
+    };
+
+    const poll = async () => {
+      if (closed) { loopActive = false; return; }
+
+      const pending = [...tracked.entries()].filter(([, s]) => !TERMINAL.includes(s.status));
+
+      if (!pending.length) {
+        loopActive = false;
+        recordCompleted();
+        const { done, failed } = render();
+        panel.querySelector('#pg-remote-cancel').textContent = 'Close';
+        showNotification(
+          failed
+            ? `Server transfer finished: ${done} moved into your library, ${failed} failed.`
+            : `Server transfer complete — ${done} file(s) are in your library.`,
+          failed ? 'warning' : 'success',
+          6000
+        );
+        return;
+      }
+
+      try {
+        const results = await aria2Call('system.multicall', [pending.map(([gid]) => ({
+          methodName: 'aria2.tellStatus',
+          params: remoteParams([gid, ['gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed', 'errorMessage']])
+        }))], CONFIG.remote.timeout);
+
+        results.forEach((entry, index) => {
+          const gid = pending[index][0];
+          const state = tracked.get(gid);
+          if (!state) return;
+
+          // A removed download comes back as a fault, not a status.
+          const status = Array.isArray(entry) ? entry[0] : null;
+          if (!status) { state.status = 'removed'; return; }
+
+          state.status = status.status;
+          state.completedLength = status.completedLength;
+          state.totalLength = status.totalLength;
+          state.downloadSpeed = status.downloadSpeed;
+          state.errorMessage = status.errorMessage || state.errorMessage;
+        });
+      } catch (error) {
+        logDebug('[MyServer] poll failed:', error.message);
+      }
+
+      recordCompleted();
+
+      if (closed) { loopActive = false; return; }
+      render();
+      pollTimer = setTimeout(poll, CONFIG.remote.pollInterval);
+    };
+
+    const startPolling = () => {
+      if (loopActive || closed) return;
+      loopActive = true;
+      poll();
+    };
+
+    // Fold a later batch into this panel and wake the loop if it had settled.
+    const addEntries = entries => {
+      if (closed) return;
+      let added = 0;
+      entries.forEach(entry => {
+        if (entry.gid && !tracked.has(entry.gid)) {
+          tracked.set(entry.gid, makeTransferState(entry));
+          added++;
+        }
+      });
+      if (!added) return;
+
+      panel.querySelector('#pg-remote-cancel').textContent = 'Cancel remaining';
+      render();
+      startPolling();
+    };
+
+    remoteTransferPanel = { element: panel, addEntries };
+
+    render();
+    startPolling();
+  }
+
+  function formatDuration(seconds) {
+    if (!isFinite(seconds) || seconds <= 0) return '';
+    const s = Math.round(seconds);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.round((s % 3600) / 60);
+    return `${hours}h ${minutes}m`;
   }
 
   // ---------- JDownloader Rename Script Generator ----------
@@ -2350,6 +6319,27 @@ Note: If blocked, right-click → Open, or run in Terminal:
           </div>
         </div>
 
+        <!-- ── Server-to-server transfer ── -->
+        <button id="send-my-server" style="
+          width: 100%; padding: 14px 16px; border: none; border-radius: 10px;
+          background: linear-gradient(135deg, #06b6d4, #0891b2);
+          color: white; cursor: pointer; font: 600 14px system-ui;
+          display: flex; align-items: center; justify-content: center; gap: 8px;
+          box-shadow: 0 3px 10px rgba(6,182,212,0.35);
+          transition: all 0.2s ease; margin-bottom: 10px;
+        " onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(6,182,212,0.45)'"
+           onmouseout="this.style.transform='';this.style.boxShadow='0 3px 10px rgba(6,182,212,0.35)'">
+          ${Icons.server} Send all ${uniqueItems.length} to My Server${remoteTargetLabel() ? ` (${escapeHtml(remoteTargetLabel())})` : ''}
+        </button>
+
+        <button id="pick-items-server" style="
+          width: 100%; padding: 9px 16px; border-radius: 9px; cursor: pointer;
+          border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
+          background: transparent; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
+          font: 500 12px system-ui; margin-bottom: 10px;
+          display: flex; align-items: center; justify-content: center; gap: 7px;
+        ">Or choose which seasons, episodes or films to send…</button>
+
         <!-- ── Primary Action Buttons ── -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
           <button id="download-manager" style="
@@ -2489,6 +6479,34 @@ Note: If blocked, right-click → Open, or run in Terminal:
         dialog.querySelector('#copy-clipboard').disabled = false;
         dialog.querySelector('#copy-clipboard').innerHTML = `${Icons.clipboard} Copy to Clipboard`;
       }
+    });
+
+    // Selecting individual items is the Download Manager's job — it already has
+    // grouping, search and checkboxes — so send the user there rather than
+    // building a second, weaker picker.
+    dialog.querySelector('#pick-items-server').addEventListener('click', async () => {
+      const picked = await showTransferSelection(uniqueItems);
+      if (!picked || !picked.length) return;
+      cleanup();
+      await runServerTransfer(picked, server, token);
+    });
+
+    // Send to My Server — everything, via the shared transfer flow.
+    dialog.querySelector('#send-my-server').addEventListener('click', async () => {
+      const serverBtn = dialog.querySelector('#send-my-server');
+      const idle = () => `${Icons.server} Send all ${uniqueItems.length} to My Server`
+        + (remoteTargetLabel() ? ` (${escapeHtml(remoteTargetLabel())})` : '');
+
+      serverBtn.disabled = true;
+      serverBtn.innerHTML = `${Icons.download} Connecting…`;
+
+      const sent = await runServerTransfer(uniqueItems, server, token, message => {
+        serverBtn.innerHTML = `${Icons.download} ${escapeHtml(message)}`;
+      });
+
+      if (sent) { cleanup(); return; }
+      serverBtn.disabled = false;
+      serverBtn.innerHTML = idle();
     });
 
     dialog.querySelector('#send-jdownloader').addEventListener('click', async () => {
@@ -5420,11 +9438,16 @@ Note: If blocked, right-click → Open, or run in Terminal:
     };
   }
 
-  function showSettingsPanel() {
+  // `initialPanel` lets callers deep-link to a section (e.g. 'panel-myserver').
+  // Guarded because this is also bound directly as a click handler, which would
+  // otherwise pass the Event object in.
+  function showSettingsPanel(initialPanel) {
     if (settingsPanel) {
       hideSettingsPanel();
       return;
     }
+
+    const requestedPanel = typeof initialPanel === 'string' ? initialPanel : null;
 
     const overlay = document.createElement('div');
     overlay.style.cssText = `
@@ -5628,6 +9651,10 @@ animation: fadeIn 0.3s ease;
           <div class="setting-nav-item" data-target="panel-filters">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
             Filters & History
+          </div>
+          <div class="setting-nav-item" data-target="panel-myserver">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"></rect><rect x="2" y="14" width="20" height="8" rx="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+            My Server
           </div>
           <div class="setting-nav-item" data-target="panel-jdownloader">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -5911,6 +9938,226 @@ animation: fadeIn 0.3s ease;
             </div>
           </div>
           
+          <!-- My Server Section (NEW v1.1.0) -->
+          <div id="panel-myserver" class="settings-panel-section" style="display: none;">
+            <h2 class="settings-section-title">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"></rect><rect x="2" y="14" width="20" height="8" rx="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              Send to My Server
+            </h2>
+
+            <p style="color: ${isDarkMode ? '#9ca3af' : '#64748b'}; font: 13px system-ui; margin: -8px 0 20px 0; line-height: 1.6;">
+              Transfer files <strong style="color: ${isDarkMode ? '#e0e0e0' : '#0f172a'}">straight from the source server to your own NAS</strong> —
+              the files never pass through this browser or your computer. PulseGrab hands the link list to a
+              downloader running on your box, which pulls the media itself at full server speed.
+            </p>
+
+            <div style="
+              display: flex; align-items: center; gap: 14px; margin-bottom: 20px;
+              padding: 16px 18px; border-radius: 12px;
+              background: ${isDarkMode ? 'rgba(6,182,212,0.08)' : '#ecfeff'};
+              border: 1px solid ${isDarkMode ? 'rgba(6,182,212,0.3)' : '#a5f3fc'};
+            ">
+              <div style="flex: 1;">
+                <div style="font: 600 14px system-ui; color: ${isDarkMode ? '#22d3ee' : '#0e7490'}; margin-bottom: 3px;">
+                  First time here?
+                </div>
+                <div style="font: 13px system-ui; line-height: 1.55; color: ${isDarkMode ? '#9ca3af' : '#334155'};">
+                  The guided setup walks you through it step by step and checks each part actually works —
+                  no Docker knowledge needed.
+                </div>
+              </div>
+              <button id="open-setup-wizard" style="
+                padding: 11px 20px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+                border: none; background: ${getTheme().gradient}; color: white; font: 600 13px system-ui;
+              ">Guided Setup</button>
+            </div>
+
+            <div class="settings-card">
+              <div class="setting-row" style="border-bottom: none;">
+                <div class="setting-info">
+                  <div class="setting-title">Transfer Method</div>
+                  <div class="setting-desc">MyJDownloader needs nothing configured on your server — no open ports, no firewall rules, and it works even when you're away from home.</div>
+                </div>
+                <div class="setting-control" style="max-width: 260px;">
+                  <select id="remote-method" class="modern-input">
+                    <option value="myjd" ${currentSettings.remoteMethod !== 'aria2' ? 'selected' : ''}>MyJDownloader — no setup</option>
+                    <option value="aria2" ${currentSettings.remoteMethod === 'aria2' ? 'selected' : ''}>aria2 — direct, advanced</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── MyJDownloader ── -->
+            <div id="remote-myjd-section" style="display: ${currentSettings.remoteMethod === 'aria2' ? 'none' : 'block'};">
+              <div class="settings-card">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-title">My.JDownloader Email</div>
+                    <div class="setting-desc">The account you signed into inside JDownloader (Settings → My.JDownloader). Free at <code>my.jdownloader.org</code>.</div>
+                  </div>
+                  <div class="setting-control" style="max-width: 240px;">
+                    <input type="email" id="myjd-email" class="modern-input" value="${escapeHtml(currentSettings.myjdEmail || '')}" placeholder="you@example.com" autocomplete="username">
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-title">Password</div>
+                    <div class="setting-desc">Used once to derive your access keys. <strong>The password itself is never saved</strong> — only the derived secrets, which can't be reversed back into it.</div>
+                  </div>
+                  <div class="setting-control" style="max-width: 240px;">
+                    <input type="password" id="myjd-password" class="modern-input" placeholder="${currentSettings.myjdLoginSecret ? '•••••••• (saved)' : 'My.JDownloader password'}" autocomplete="new-password">
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-title">JDownloader Instance</div>
+                    <div class="setting-desc">Which of your machines receives the files. Click Connect to load the list.</div>
+                  </div>
+                  <div class="setting-control" style="max-width: 240px; display: flex; flex-direction: column; gap: 8px;">
+                    <select id="myjd-device" class="modern-input">
+                      ${currentSettings.myjdDeviceId
+                        ? `<option value="${escapeHtml(currentSettings.myjdDeviceId)}" selected>${escapeHtml(currentSettings.myjdDeviceName || currentSettings.myjdDeviceId)}</option>`
+                        : '<option value="">— not connected —</option>'}
+                    </select>
+                    <button id="myjd-connect" style="width: 100%; padding: 8px; background: ${getTheme().primary}; border: none; color: white; border-radius: 6px; cursor: pointer; font: 600 12px system-ui;">Connect &amp; List Devices</button>
+                  </div>
+                </div>
+
+                <div class="setting-row" style="border-bottom: none;">
+                  <div class="setting-info">
+                    <div class="setting-title">Destination Folder</div>
+                    <div class="setting-desc">Absolute path <em>on the JDownloader machine</em> pointing at your library root. Files land in <code>Movies/</code>, <code>TV Shows/</code> and <code>Music/</code> underneath it.</div>
+                  </div>
+                  <div class="setting-control" style="max-width: 280px; display: flex; gap: 6px;">
+                    <input type="text" id="myjd-destination" class="modern-input" style="flex:1; min-width:0;" value="${escapeHtml(currentSettings.myjdDestination || '')}" placeholder="${escapeHtml(discoveredMediaRoot() || '/mnt/tank/media')}">
+                    <button id="myjd-dest-browse" style="padding: 0 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'}; background: ${isDarkMode ? '#232323' : '#f9fafb'}; color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;">Browse…</button>
+                  </div>
+                </div>
+              </div>
+
+              <div style="background: ${isDarkMode ? 'rgba(34, 197, 94, 0.08)' : '#f0fdf4'}; border: 1px solid ${isDarkMode ? 'rgba(34, 197, 94, 0.3)' : '#bbf7d0'}; border-radius: 12px; padding: 16px;">
+                <h4 style="color: ${isDarkMode ? '#4ade80' : '#15803d'}; margin: 0 0 12px 0; font: 600 14px system-ui;">Setup — two steps, nothing to configure on the server</h4>
+                <ol style="color: ${isDarkMode ? '#9ca3af' : '#334155'}; font: 13px system-ui; margin: 0; padding-left: 20px; line-height: 1.7;">
+                  <li>Install <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">JDownloader2</strong> on your NAS — on TrueNAS it's a one-click app in <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Apps → Discover</strong>. Open it and sign in under <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Settings → My.JDownloader</strong>.</li>
+                  <li>Enter the same account above, click <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Connect</strong>, pick your machine, and set the destination folder.</li>
+                </ol>
+                <p style="color: ${isDarkMode ? '#6b7280' : '#64748b'}; font: 12px system-ui; margin: 12px 0 0 0; line-height: 1.6;">
+                  No ports to open and no staging folder needed — JDownloader writes <code>.part</code> files while downloading and renames on completion, so your media server never indexes a half-finished episode.
+                  Track progress in JDownloader itself or at <code>my.jdownloader.org</code>.
+                  Note that your download links are relayed through JDownloader's servers (encrypted with a key derived from your password); pick aria2 if you'd rather nothing left your network.
+                </p>
+              </div>
+            </div>
+
+            <!-- ── aria2 ── -->
+            <div id="remote-aria2-section" style="display: ${currentSettings.remoteMethod === 'aria2' ? 'block' : 'none'};">
+            <div class="settings-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Server Address</div>
+                  <div class="setting-desc">Hostname or IP of the machine running aria2 — e.g. <code>truenas.local</code> or <code>192.168.1.50</code>.</div>
+                </div>
+                <div class="setting-control" style="max-width: 220px;">
+                  <input type="text" id="remote-host" class="modern-input" value="${escapeHtml(currentSettings.remoteHost || '')}" placeholder="192.168.1.50">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">RPC Port</div>
+                  <div class="setting-desc">aria2's JSON-RPC port. Default is 6800.</div>
+                </div>
+                <div class="setting-control" style="max-width: 140px;">
+                  <input type="number" id="remote-port" class="modern-input" value="${currentSettings.remotePort || 6800}" min="1" max="65535">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">RPC Secret</div>
+                  <div class="setting-desc">The <code>RPC_SECRET</code> you set on the container. Stored locally in your userscript manager.</div>
+                </div>
+                <div class="setting-control" style="max-width: 220px;">
+                  <input type="password" id="remote-secret" class="modern-input" value="${escapeHtml(currentSettings.remoteSecret || '')}" placeholder="shared secret" autocomplete="new-password">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Use HTTPS</div>
+                  <div class="setting-desc">Only if aria2 sits behind a TLS reverse proxy. Plain HTTP is fine on a trusted LAN.</div>
+                </div>
+                <div class="setting-control">
+                  <label class="custom-toggle">
+                    <input type="checkbox" id="remote-secure" ${currentSettings.remoteSecure ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Library Path</div>
+                  <div class="setting-desc">Path <em>inside the aria2 container</em> that maps to your media library root. Files land in <code>Movies/</code>, <code>TV Shows/</code> and <code>Music/</code> under it.</div>
+                </div>
+                <div class="setting-control" style="max-width: 220px;">
+                  <input type="text" id="remote-library-dir" class="modern-input" value="${escapeHtml(currentSettings.remoteLibraryDir || '/downloads')}" placeholder="/downloads">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Connections Per File</div>
+                  <div class="setting-desc">Keep at 1 unless you own the source server too — more connections can trip rate limits on someone else's box.</div>
+                </div>
+                <div class="setting-control" style="max-width: 140px;">
+                  <input type="number" id="remote-max-connections" class="modern-input" value="${currentSettings.remoteMaxConnections || 1}" min="1" max="16">
+                </div>
+              </div>
+
+              <div class="setting-row" style="border-bottom: none;">
+                <div class="setting-info">
+                  <div class="setting-title">Show Live Transfer Panel</div>
+                  <div class="setting-desc">Displays progress after queueing. Transfers continue even if you close the panel or the tab.</div>
+                </div>
+                <div class="setting-control" style="display: flex; gap: 8px; align-items: center;">
+                  <label class="custom-toggle">
+                    <input type="checkbox" id="remote-auto-panel" ${currentSettings.remoteAutoStartPanel !== false ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+              <button id="test-remote" style="flex: 1; padding: 10px; background: transparent; border: 1px solid ${getTheme().primary}; color: ${getTheme().primary}; border-radius: 8px; cursor: pointer; font: 600 13px system-ui;">Test Connection</button>
+            </div>
+
+            <div style="background: ${isDarkMode ? 'rgba(6, 182, 212, 0.08)' : '#ecfeff'}; border: 1px solid ${isDarkMode ? 'rgba(6, 182, 212, 0.3)' : '#a5f3fc'}; border-radius: 12px; padding: 16px;">
+              <h4 style="color: ${isDarkMode ? '#22d3ee' : '#0e7490'}; margin: 0 0 12px 0; font: 600 14px system-ui;">Destination Setup (one time)</h4>
+              <ol style="color: ${isDarkMode ? '#9ca3af' : '#334155'}; font: 13px system-ui; margin: 0 0 14px 0; padding-left: 20px; line-height: 1.7;">
+                <li>On TrueNAS: <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Apps → Discover → Custom App → Install via YAML</strong>, and paste the compose file below.</li>
+                <li>Change the left side of the library volume to your own media dataset, and <code>PUID</code>/<code>PGID</code> to the user Emby runs as (568:568 on TrueNAS).</li>
+                <li>Save the hook script as <code>/config/script/pulsegrab-move.sh</code>, run <code>chmod 700</code> on it, and <em>replace</em> the
+                    <code>on-download-complete=</code> line in <code>/config/aria2.conf</code> with
+                    <code>on-download-complete=/config/script/pulsegrab-move.sh</code>. The image ships that line already pointing at its own
+                    cleanup script — PulseGrab's hook calls it afterwards, so nothing is lost.</li>
+                <li>Restart the app, then hit <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Test Connection</strong> above.</li>
+              </ol>
+              <p style="color: ${isDarkMode ? '#6b7280' : '#64748b'}; font: 12px system-ui; margin: 0 0 12px 0; line-height: 1.6;">
+                Downloads land in a hidden <code>${CONFIG.remote.stagingDir}</code> folder first so Emby never
+                indexes a half-finished episode; the hook moves each file into place the moment it completes.
+              </p>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button id="copy-remote-compose" style="padding: 8px 14px; background: ${getTheme().primary}; border: none; color: white; border-radius: 6px; cursor: pointer; font: 600 12px system-ui;">Copy compose YAML</button>
+                <button id="copy-remote-hook" style="padding: 8px 14px; background: transparent; border: 1px solid ${isDarkMode ? '#3f3f46' : '#cbd5e1'}; color: ${isDarkMode ? '#d1d5db' : '#334155'}; border-radius: 6px; cursor: pointer; font: 600 12px system-ui;">Copy hook script</button>
+              </div>
+            </div>
+            </div><!-- /remote-aria2-section -->
+          </div>
+
           <!-- JDownloader Section -->
           <div id="panel-jdownloader" class="settings-panel-section" style="display: none;">
             <h2 class="settings-section-title">
@@ -5945,6 +10192,16 @@ animation: fadeIn 0.3s ease;
                 </div>
               </div>
               
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">JDownloader Host</div>
+                  <div class="setting-desc">Leave blank for JDownloader on this computer. To reach an instance on another machine (a NAS app, a seedbox), enter its address — and set <code>ExternInterfaceLocalhostOnly</code> to false in that JDownloader's Advanced Settings, or it will refuse remote connections.</div>
+                </div>
+                <div class="setting-control" style="max-width: 220px;">
+                  <input type="text" id="jdownloader-host" class="modern-input" value="${escapeHtml(currentSettings.jdownloaderHost || '')}" placeholder="local (127.0.0.1)">
+                </div>
+              </div>
+
               <div class="setting-row" style="border-bottom: none;">
                 <div class="setting-info">
                   <div class="setting-title">FlashGot Listener Port</div>
@@ -5993,7 +10250,165 @@ animation: fadeIn 0.3s ease;
                 <input type="text" id="filename-template-movie" class="modern-input" value="${currentSettings.filenameTemplateMovie || '{Title} ({Year})'}">
               </div>
             </div>
-            
+
+            <h2 class="settings-section-title" style="margin-top: 28px;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"></rect><rect x="2" y="14" width="20" height="8" rx="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              Connect My Library
+            </h2>
+            <p style="color: ${isDarkMode ? '#9ca3af' : '#64748b'}; font: 13px system-ui; margin: -8px 0 16px 0; line-height: 1.6;">
+              Optional, but worth it: point PulseGrab at <em>your own</em> Emby/Jellyfin and it reads your real
+              library names and lets you <strong style="color: ${isDarkMode ? '#e0e0e0' : '#0f172a'}">browse folders</strong>
+              instead of typing paths. Used only to look around — never to download.
+            </p>
+
+            <div class="settings-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">My Server Address</div>
+                  <div class="setting-desc">e.g. <code>http://192.168.100.252:8096</code>. Leave blank to use the current tab when you're already on your own server.</div>
+                </div>
+                <div class="setting-control" style="max-width: 240px;">
+                  <input type="text" id="dest-server-url" class="modern-input" value="${escapeHtml(currentSettings.destServerUrl || '')}" placeholder="http://192.168.1.50:8096">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">API Key</div>
+                  <div class="setting-desc">Emby/Jellyfin → Dashboard → Advanced → API Keys. Use an <strong>admin</strong> key if you want folder browsing; a normal one still discovers libraries.</div>
+                </div>
+                <div class="setting-control" style="max-width: 240px;">
+                  <input type="password" id="dest-api-key" class="modern-input" value="${escapeHtml(currentSettings.destApiKey || '')}" placeholder="paste API key" autocomplete="new-password">
+                </div>
+              </div>
+
+              <div class="setting-row" style="border-bottom: none;">
+                <div class="setting-info">
+                  <div class="setting-title">Discovered Libraries</div>
+                  <div class="setting-desc" id="dest-lib-summary">${
+                    (() => {
+                      try {
+                        const cached = JSON.parse(currentSettings.destLibrariesCache || '[]');
+                        return cached.length
+                          ? cached.map(l => `${escapeHtml(l.name)} <code>${escapeHtml(l.folder)}</code>`).join(' &middot; ')
+                          : 'Not connected yet.';
+                      } catch (e) { return 'Not connected yet.'; }
+                    })()
+                  }</div>
+                </div>
+                <div class="setting-control" style="max-width: 200px;">
+                  <button id="dest-detect" style="width: 100%; padding: 9px; background: ${getTheme().primary}; border: none; color: white; border-radius: 7px; cursor: pointer; font: 600 12px system-ui;">Connect &amp; Detect</button>
+                </div>
+              </div>
+            </div>
+
+            <h2 class="settings-section-title" style="margin-top: 28px;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+              Library Folder Names
+            </h2>
+            <p style="color: ${isDarkMode ? '#9ca3af' : '#64748b'}; font: 13px system-ui; margin: -8px 0 16px 0; line-height: 1.6;">
+              The top-level folders downloads are sorted into. These must match the folder names your
+              media server actually scans — if your libraries are called <code>Filmes</code> and <code>Series</code>,
+              leaving these as <code>Movies</code> and <code>TV&nbsp;Shows</code> creates folders your server ignores.
+            </p>
+
+            <div class="settings-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Movies Folder</div>
+                  <div class="setting-desc">Where films are placed.</div>
+                </div>
+                <div class="setting-control" style="max-width: 260px; display: flex; gap: 6px;">
+                  <input type="text" id="library-folder-movies" class="modern-input" style="flex:1; min-width:0;" value="${escapeHtml(currentSettings.libraryFolderMovies || 'Movies')}" placeholder="Movies">
+                  <button class="pg-settings-browse" data-target="#library-folder-movies" style="padding: 0 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'}; background: ${isDarkMode ? '#232323' : '#f9fafb'}; color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;">Browse…</button>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Folder Per Film</div>
+                  <div class="setting-desc">On: <code>Filmes/Dune (2021)/Dune (2021).mkv</code>. Off: the film sits loose in the library folder, matching libraries that don't use per-film folders.</div>
+                </div>
+                <div class="setting-control">
+                  <label class="custom-toggle">
+                    <input type="checkbox" id="movie-folder-per-film" ${currentSettings.movieFolderPerFilm !== false ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">TV Shows Folder</div>
+                  <div class="setting-desc">Series are nested as <code>&lt;folder&gt;/Show/Season 01/</code>.</div>
+                </div>
+                <div class="setting-control" style="max-width: 260px; display: flex; gap: 6px;">
+                  <input type="text" id="library-folder-shows" class="modern-input" style="flex:1; min-width:0;" value="${escapeHtml(currentSettings.libraryFolderShows || 'TV Shows')}" placeholder="TV Shows">
+                  <button class="pg-settings-browse" data-target="#library-folder-shows" style="padding: 0 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'}; background: ${isDarkMode ? '#232323' : '#f9fafb'}; color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;">Browse…</button>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Music Folder</div>
+                  <div class="setting-desc">Audio is nested as <code>&lt;folder&gt;/Artist/Album/</code>.</div>
+                </div>
+                <div class="setting-control" style="max-width: 260px; display: flex; gap: 6px;">
+                  <input type="text" id="library-folder-music" class="modern-input" style="flex:1; min-width:0;" value="${escapeHtml(currentSettings.libraryFolderMusic || 'Music')}" placeholder="Music">
+                  <button class="pg-settings-browse" data-target="#library-folder-music" style="padding: 0 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; border: 1px solid ${isDarkMode ? '#3f3f46' : '#d1d5db'}; background: ${isDarkMode ? '#232323' : '#f9fafb'}; color: ${isDarkMode ? '#d1d5db' : '#374151'}; font: 500 12px system-ui;">Browse…</button>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Other Library Folders</div>
+                  <div class="setting-desc">Comma-separated extras offered when choosing a destination — e.g. <code>Anime Series, Anime Filmes, Curtas</code>. Connect your server below and these are discovered automatically.</div>
+                </div>
+                <div class="setting-control" style="max-width: 220px;">
+                  <input type="text" id="library-folders-extra" class="modern-input" value="${escapeHtml(currentSettings.libraryFoldersExtra || '')}" placeholder="Anime Series, Curtas">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Pinned Folders</div>
+                  <div class="setting-desc">Always offered first, before anything else. Pin them from the folder browser, or list them here.</div>
+                </div>
+                <div class="setting-control" style="max-width: 220px;">
+                  <input type="text" id="pinned-folders" class="modern-input" value="${escapeHtml(currentSettings.pinnedFolders || '')}" placeholder="Series, Filmes">
+                </div>
+              </div>
+
+              <div class="setting-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                <div class="setting-info" style="width: 100%; padding: 0;">
+                  <div class="setting-title">Sorting Rules</div>
+                  <div class="setting-desc" style="margin-bottom: 8px;">
+                    One per line: <code>text to match =&gt; folder</code>. Matched against the source file path and title.
+                    A rule beats the remembered folder and the defaults above.
+                    <br>Content type is corrected automatically — with libraries like <code>Anime Filmes</code> and
+                    <code>Anime Series</code>, a single <code>Anime</code> rule sends films to one and episodes to the other.
+                  </div>
+                </div>
+                <textarea id="destination-rules" class="modern-input" rows="4" style="
+                  width: 100%; box-sizing: border-box; resize: vertical;
+                  font: 12px ui-monospace, monospace;
+                " placeholder="Anime =&gt; Anime Series&#10;Documentar =&gt; Documentaries&#10;Curta =&gt; Curtas">${escapeHtml(currentSettings.destinationRules || '')}</textarea>
+              </div>
+
+              <div class="setting-row" style="border-bottom: none;">
+                <div class="setting-info">
+                  <div class="setting-title">Ask Before Each Server Transfer</div>
+                  <div class="setting-desc">Shows a destination picker when you click Send to My Server. Turn off to always use the folders above.</div>
+                </div>
+                <div class="setting-control">
+                  <label class="custom-toggle">
+                    <input type="checkbox" id="remote-ask-destination" ${currentSettings.remoteAskDestination !== false ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
             <div style="background: ${isDarkMode ? '#252525' : '#f8fafc'}; border: 1px dashed ${isDarkMode ? '#4b5563' : '#cbd5e1'}; border-radius: 12px; padding: 16px;">
               <div style="color: ${isDarkMode ? '#e0e0e0' : '#334155'}; font-weight: 500; font-size: 13px; margin-bottom: 12px;">Valid Substitution Tokens:</div>
               <div style="display: flex; flex-wrap: wrap; gap: 8px;">
@@ -6127,6 +10542,11 @@ animation: fadeIn 0.3s ease;
           }
         });
       });
+
+      if (requestedPanel) {
+        const target = [...navItems].find(item => item.getAttribute('data-target') === requestedPanel);
+        if (target) target.click();
+      }
     }, 10);
 
     // Event listeners
@@ -6134,6 +10554,48 @@ animation: fadeIn 0.3s ease;
     panel.querySelector('#reset-settings').addEventListener('click', resetSettings);
     panel.querySelector('#save-settings').addEventListener('click', saveSettings);
     panel.querySelector('#test-jdownloader').addEventListener('click', testJDownloaderFromSettings);
+
+    // My Server — swap the visible fields with the chosen transfer method.
+    const methodSelect = panel.querySelector('#remote-method');
+    methodSelect.addEventListener('change', () => {
+      const useAria2 = methodSelect.value === 'aria2';
+      panel.querySelector('#remote-myjd-section').style.display = useAria2 ? 'none' : 'block';
+      panel.querySelector('#remote-aria2-section').style.display = useAria2 ? 'block' : 'none';
+    });
+
+    panel.querySelector('#myjd-connect').addEventListener('click', () => myjdConnectFromSettings(panel));
+    panel.querySelector('#myjd-dest-browse').addEventListener('click', async () => {
+      const picked = await browseForFolder('', { absolute: true });
+      if (picked) panel.querySelector('#myjd-destination').value = picked;
+    });
+    panel.querySelector('#dest-detect').addEventListener('click', () => detectLibrariesFromSettings(panel));
+    panel.querySelector('#open-setup-wizard').addEventListener('click', () => {
+      hideSettingsPanel();
+      setTimeout(showSetupWizard, 220);
+    });
+
+    // Browse buttons next to each library-folder field.
+    panel.querySelectorAll('.pg-settings-browse').forEach(button => {
+      button.addEventListener('click', async () => {
+        const input = panel.querySelector(button.dataset.target);
+        if (!input) return;
+        const picked = await browseForFolder(sanitizeFolderName(input.value) || '');
+        if (picked) input.value = picked;
+      });
+    });
+    panel.querySelector('#test-remote').addEventListener('click', testRemoteFromSettings);
+
+    panel.querySelector('#copy-remote-compose').addEventListener('click', async () => {
+      applyRemoteSettingsFromPanel(panel);
+      await copyToClipboard(remoteComposeYaml());
+      showNotification('Compose YAML copied — paste it into TrueNAS → Custom App → Install via YAML.', 'success', 5000);
+    });
+
+    panel.querySelector('#copy-remote-hook').addEventListener('click', async () => {
+      applyRemoteSettingsFromPanel(panel);
+      await copyToClipboard(remoteHookScript());
+      showNotification('Hook script copied — save as /config/script/pulsegrab-move.sh (NOT /config/, the image resets permissions there).', 'success', 5000);
+    });
 
     // History buttons
     panel.querySelector('#view-history').addEventListener('click', showHistoryDialog);
@@ -6307,6 +10769,225 @@ animation: fadeIn 0.3s ease;
     }
   }
 
+  // The setup snippets and the connection test both need to reflect what's
+  // currently typed in the panel, not what was last saved — otherwise "Test" and
+  // "Copy compose YAML" silently use stale values before the user hits Save.
+  function applyRemoteSettingsFromPanel(panel) {
+    const scope = panel || settingsPanel || document;
+    const read = selector => scope.querySelector(selector);
+
+    const host = read('#remote-host');
+    const port = read('#remote-port');
+    const secret = read('#remote-secret');
+    const secure = read('#remote-secure');
+    const libraryDir = read('#remote-library-dir');
+    const maxConnections = read('#remote-max-connections');
+    const autoPanel = read('#remote-auto-panel');
+
+    if (host) Settings.set('remoteHost', host.value.trim());
+    if (port) Settings.set('remotePort', Math.max(1, Math.min(65535, parseInt(port.value, 10) || CONFIG.remote.defaultPort)));
+    if (secret) Settings.set('remoteSecret', secret.value);
+    if (secure) Settings.set('remoteSecure', secure.checked);
+    if (libraryDir) Settings.set('remoteLibraryDir', (libraryDir.value.trim() || '/downloads').replace(/\/+$/, '') || '/');
+    if (maxConnections) Settings.set('remoteMaxConnections', Math.max(1, Math.min(16, parseInt(maxConnections.value, 10) || 1)));
+    if (autoPanel) Settings.set('remoteAutoStartPanel', autoPanel.checked);
+  }
+
+  async function detectLibrariesFromSettings(panel) {
+    const scope = panel || settingsPanel || document;
+    const button = scope.querySelector('#dest-detect');
+    const summary = scope.querySelector('#dest-lib-summary');
+    if (!button) return;
+
+    const originalText = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = 'Connecting…';
+
+    try {
+      // Persist what's typed so resolveDestServer() sees it.
+      const urlInput = scope.querySelector('#dest-server-url');
+      const keyInput = scope.querySelector('#dest-api-key');
+      if (urlInput) Settings.set('destServerUrl', urlInput.value.trim());
+      if (keyInput) Settings.set('destApiKey', keyInput.value.trim());
+
+      // Identify the product so the right API prefix is used (Emby needs /emby).
+      if (urlInput && urlInput.value.trim()) {
+        const info = await detectDestServer(urlInput.value.trim(), null);
+        Settings.set('destServerType', info.type);
+        Settings.set('destServerUrl', info.url);
+        urlInput.value = info.url;
+      }
+
+      // A fresh detect should re-derive the root rather than trust a stale one.
+      Settings.set('destMediaRoot', '');
+      const libraries = await refreshDestLibraries();
+
+      if (!libraries.length) {
+        summary.textContent = 'Connected, but no libraries were reported.';
+        showNotification('Connected, but your server reported no libraries.', 'warning', 6000);
+        return;
+      }
+
+      summary.innerHTML = libraries
+        .map(library => `${escapeHtml(library.name)} <code>${escapeHtml(library.folder)}</code>`)
+        .join(' &middot; ');
+
+      // Offer every discovered folder in the pickers from now on.
+      const existing = (Settings.get('libraryFoldersExtra') || '').split(',').map(s => s.trim()).filter(Boolean);
+      Settings.set('libraryFoldersExtra',
+        [...new Set([...existing, ...libraries.map(library => library.folder)])].join(', '));
+      const extraInput = scope.querySelector('#library-folders-extra');
+      if (extraInput) extraInput.value = Settings.get('libraryFoldersExtra');
+
+      // Pre-fill the per-type defaults from the first library of each type.
+      [['movie', '#library-folder-movies'], ['episode', '#library-folder-shows'], ['audio', '#library-folder-music']]
+        .forEach(([kind, selector]) => {
+          const match = libraries.find(library => library.type === kind);
+          const input = scope.querySelector(selector);
+          if (match && input) input.value = match.folder;
+        });
+
+      showNotification(
+        `Found ${libraries.length} librar${libraries.length === 1 ? 'y' : 'ies'} at ${Settings.get('destMediaRoot')} — folder browsing is now available.`,
+        'success', 6000
+      );
+    } catch (error) {
+      showNotification(error.message, error.needsAdmin ? 'warning' : 'error', 10000);
+    } finally {
+      button.disabled = false;
+      button.innerHTML = originalText;
+    }
+  }
+
+  async function myjdConnectFromSettings(panel) {
+    const scope = panel || settingsPanel || document;
+    const button = scope.querySelector('#myjd-connect');
+    const emailInput = scope.querySelector('#myjd-email');
+    const passwordInput = scope.querySelector('#myjd-password');
+    const deviceSelect = scope.querySelector('#myjd-device');
+    if (!button) return;
+
+    const originalText = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = 'Connecting…';
+
+    try {
+      const email = (emailInput.value || '').trim();
+      const password = passwordInput.value;
+
+      // Re-use the stored secrets when the field is left blank on a revisit, so
+      // listing devices again doesn't force the password to be retyped.
+      const devices = password
+        ? await myjdSignIn(email, password)
+        : await (async () => {
+            if (!Settings.get('myjdLoginSecret')) {
+              throw new Error('Enter your My.JDownloader password to connect.');
+            }
+            if (email && email !== Settings.get('myjdEmail')) {
+              throw new Error('That email differs from the saved one — enter the password to sign in again.');
+            }
+            myjdSession = null;
+            return myjdListDevices();
+          })();
+
+      passwordInput.value = '';
+
+      if (!devices.length) {
+        deviceSelect.innerHTML = '<option value="">— no JDownloader found —</option>';
+        showNotification('Signed in, but no JDownloader is linked to that account. Open JDownloader on your NAS and sign into My.JDownloader there.', 'warning', 10000);
+        return;
+      }
+
+      const previous = Settings.get('myjdDeviceId');
+      deviceSelect.innerHTML = devices.map(device =>
+        `<option value="${escapeHtml(device.id)}" ${device.id === previous ? 'selected' : ''}>${escapeHtml(device.name || device.id)}</option>`
+      ).join('');
+
+      // Nothing chosen yet? Take the only/first one so the user can just save.
+      if (!previous || !devices.some(device => device.id === previous)) {
+        deviceSelect.value = devices[0].id;
+      }
+
+      showNotification(`Connected — found ${devices.length} JDownloader instance(s).`, 'success', 4000);
+    } catch (error) {
+      showNotification(error.message, 'error', 10000);
+    } finally {
+      button.disabled = false;
+      button.innerHTML = originalText;
+    }
+  }
+
+  function applyMyjdSettingsFromPanel(panel) {
+    const scope = panel || settingsPanel || document;
+    const email = scope.querySelector('#myjd-email');
+    const deviceSelect = scope.querySelector('#myjd-device');
+    const destination = scope.querySelector('#myjd-destination');
+    const method = scope.querySelector('#remote-method');
+
+    if (method) Settings.set('remoteMethod', method.value === 'aria2' ? 'aria2' : 'myjd');
+    if (email) Settings.set('myjdEmail', email.value.trim());
+    if (destination) Settings.set('myjdDestination', destination.value.trim().replace(/\/+$/, ''));
+    if (deviceSelect && deviceSelect.value) {
+      Settings.set('myjdDeviceId', deviceSelect.value);
+      const option = deviceSelect.options[deviceSelect.selectedIndex];
+      Settings.set('myjdDeviceName', option ? option.textContent : '');
+    }
+  }
+
+  async function testRemoteFromSettings() {
+    const testBtn = document.getElementById('test-remote');
+    if (!testBtn) return;
+
+    applyRemoteSettingsFromPanel();
+
+    const originalText = testBtn.innerHTML;
+    testBtn.disabled = true;
+    testBtn.innerHTML = `${Icons.download} Testing...`;
+
+    const restore = (delay = 2600) => setTimeout(() => {
+      testBtn.disabled = false;
+      testBtn.innerHTML = originalText;
+      testBtn.style.borderColor = getTheme().primary;
+      testBtn.style.color = getTheme().primary;
+    }, delay);
+
+    if (!remoteHost()) {
+      showNotification('Enter a server address first.', 'warning', 3000);
+      restore(0);
+      return;
+    }
+
+    try {
+      const health = await testRemoteConnection();
+      testBtn.innerHTML = `${Icons.check} Connected!`;
+      testBtn.style.borderColor = getTheme().primary;
+      testBtn.style.color = getTheme().primary;
+
+      if (health.hookInstalled) {
+        showNotification(`Connected to aria2 ${health.version || ''} — PulseGrab's move hook is installed. You're ready.`.trim(), 'success', 4000);
+      } else if (health.foreignHook) {
+        showNotification(
+          `Connected to aria2 ${health.version || ''}, but on-download-complete points at "${health.foreignHook}" — not PulseGrab's mover. Finished files will stay in the staging folder. Install the hook script below (it chains to the existing one, so you won't lose it).`.trim(),
+          'warning',
+          12000
+        );
+      } else {
+        showNotification(
+          `Connected to aria2 ${health.version || ''}, but no on-download-complete hook is configured. Finished files will pile up in the staging folder instead of moving into your library — copy the hook script below and add it to aria2.conf.`.trim(),
+          'warning',
+          10000
+        );
+      }
+    } catch (error) {
+      testBtn.innerHTML = `${Icons.alert} Failed`;
+      testBtn.style.borderColor = '#ef4444';
+      testBtn.style.color = '#ef4444';
+      showNotification(error.message, 'error', 9000);
+    }
+
+    restore();
+  }
+
   async function testJDownloaderFromSettings() {
     const testBtn = document.getElementById('test-jdownloader');
     const portInput = document.getElementById('jdownloader-port');
@@ -6366,6 +11047,7 @@ animation: fadeIn 0.3s ease;
           const showProgress = settingsPanel.querySelector('#show-progress').checked;
           const autoConfirm = settingsPanel.querySelector('#auto-confirm').checked;
           const jdownloaderEnabled = settingsPanel.querySelector('#jdownloader-enabled').checked;
+          const jdownloaderHost = (settingsPanel.querySelector('#jdownloader-host')?.value || '').trim();
           const jdownloaderPort = parseInt(settingsPanel.querySelector('#jdownloader-port').value);
           const jdownloaderAutoDetect = settingsPanel.querySelector('#jdownloader-auto-detect').checked;
 
@@ -6395,11 +11077,50 @@ animation: fadeIn 0.3s ease;
           Settings.set('showProgress', showProgress);
           Settings.set('autoConfirm', autoConfirm);
           Settings.set('jdownloaderEnabled', jdownloaderEnabled);
+          Settings.set('jdownloaderHost', jdownloaderHost);
           Settings.set('jdownloaderPort', Math.max(1, Math.min(65535, jdownloaderPort || CONFIG.jdownloader.defaultPort)));
+
+          // NEW v1.1.0: My Server — same normalisation the Test/Connect buttons use.
+          applyRemoteSettingsFromPanel(settingsPanel);
+          applyMyjdSettingsFromPanel(settingsPanel);
 
           // Save Templates
           if (filenameTemplateEpisode) Settings.set('filenameTemplateEpisode', filenameTemplateEpisode);
           if (filenameTemplateMovie) Settings.set('filenameTemplateMovie', filenameTemplateMovie);
+
+          // NEW v1.1.0: library folder names (blank falls back to the default).
+          [
+            ['#library-folder-movies', 'libraryFolderMovies', 'Movies'],
+            ['#library-folder-shows', 'libraryFolderShows', 'TV Shows'],
+            ['#library-folder-music', 'libraryFolderMusic', 'Music']
+          ].forEach(([selector, key, fallback]) => {
+            const input = settingsPanel.querySelector(selector);
+            if (input) Settings.set(key, (input.value || '').trim() || fallback);
+          });
+
+          const extraFolders = settingsPanel.querySelector('#library-folders-extra');
+          if (extraFolders) {
+            Settings.set('libraryFoldersExtra', extraFolders.value
+              .split(',').map(name => name.trim()).filter(Boolean).join(', '));
+          }
+          const askDestination = settingsPanel.querySelector('#remote-ask-destination');
+          if (askDestination) Settings.set('remoteAskDestination', askDestination.checked);
+
+          const perFilm = settingsPanel.querySelector('#movie-folder-per-film');
+          if (perFilm) Settings.set('movieFolderPerFilm', perFilm.checked);
+
+          const pinned = settingsPanel.querySelector('#pinned-folders');
+          if (pinned) {
+            Settings.set('pinnedFolders', pinned.value
+              .split(',').map(name => name.trim()).filter(Boolean).join(', '));
+          }
+          const rules = settingsPanel.querySelector('#destination-rules');
+          if (rules) Settings.set('destinationRules', rules.value.trim());
+
+          const destUrl = settingsPanel.querySelector('#dest-server-url');
+          if (destUrl) Settings.set('destServerUrl', destUrl.value.trim());
+          const destKey = settingsPanel.querySelector('#dest-api-key');
+          if (destKey) Settings.set('destApiKey', destKey.value.trim());
 
           // NEW v6.59: Save Subtitle Settings
           const dlExternalSubtitles = settingsPanel.querySelector('#dl-external-subtitles').checked;
@@ -8617,11 +13338,78 @@ animation: fadeIn 0.3s ease;
     }
   }
 
+  // ---------- Search results view ----------
+  // Emby/Jellyfin search pages carry no parentId — the results come from a
+  // query, so the folder scanner has nothing to walk and the old code fell
+  // through to "Could not detect item ID". These helpers give the search view
+  // its own path.
+  const SEARCH_VIEW_RE = /(?:[?&]type=search\b)|(?:[#/]search(?:\.html)?(?:[?&#]|$))|(?:[?&](?:searchTerm|searchterm|query)=)/i;
+
+  function isSearchView(hash) {
+    const h = (hash === undefined ? window.location.hash : hash) || '';
+    return SEARCH_VIEW_RE.test(h + window.location.search);
+  }
+
+  // The term lives in the URL on some builds and only in the search box on
+  // others (Emby 4.9 keeps it in the input while you type), so try both.
+  function getSearchTerm() {
+    const combined = window.location.hash + window.location.search;
+    const m = combined.match(/[?&](?:searchTerm|searchterm|query|q)=([^&#]*)/i);
+    if (m && m[1]) {
+      try { return decodeURIComponent(m[1].replace(/\+/g, ' ')).trim(); }
+      catch (e) { return m[1].trim(); }
+    }
+    const input = document.querySelector(
+      'input[type="search"], .searchfields input, .searchInput, input.searchfields-txtSearch, input[placeholder*="earch"], input[placeholder*="uscar"]'
+    );
+    return input && input.value ? input.value.trim() : '';
+  }
+
+  // Whatever the active tab calls itself -> the item types it represents.
+  // null means "no filter, everything".
+  const SEARCH_TAB_TYPES = {
+    all: null,
+    movies: ['Movie'], movie: ['Movie'], films: ['Movie'], filmes: ['Movie'],
+    shows: ['Series'], show: ['Series'], series: ['Series'], tvshows: ['Series'],
+    tv: ['Series'], tvseries: ['Series'], programas: ['Series'],
+    episodes: ['Episode'], episode: ['Episode'], episodios: ['Episode'],
+    seasons: ['Season'], season: ['Season'],
+    collections: ['BoxSet'], collection: ['BoxSet'], boxsets: ['BoxSet'],
+    videos: ['Video'], video: ['Video'],
+    music: ['Audio', 'MusicAlbum'], songs: ['Audio'], albums: ['MusicAlbum'],
+    musicvideos: ['MusicVideo'],
+    people: [], person: [], actors: []
+  };
+
+  // Best-effort read of the active search tab. Emby states it in the URL on
+  // some versions and only in the DOM on others, and the active-tab class name
+  // has changed across releases — so try the URL, then several class names.
+  // Returns types:null when nothing can be determined (meaning "search all").
+  function getActiveSearchTab() {
+    const combined = window.location.hash + window.location.search;
+    const urlMatch = combined.match(/[?&]IncludeItemTypes=([^&#]+)/i);
+    if (urlMatch) {
+      const types = decodeURIComponent(urlMatch[1]).split(',').map(t => t.trim()).filter(Boolean);
+      if (types.length) return { label: types.join(','), types };
+    }
+
+    const active = document.querySelector(
+      '.emby-tab-button-active, .emby-tab-button.is-active, .tabButton-active, '
+      + 'button[role="tab"][aria-selected="true"], [role="tab"].selected, .ui-btn-active'
+    );
+    const label = active ? (active.textContent || '').trim().toLowerCase().replace(/[^a-z]/g, '') : '';
+    if (label && Object.prototype.hasOwnProperty.call(SEARCH_TAB_TYPES, label)) {
+      return { label, types: SEARCH_TAB_TYPES[label] };
+    }
+    return { label: label || 'all', types: null };
+  }
+
   // --- Emby page detection ---
   function detectPageTypeEmby() {
     const hash = window.location.hash;
     if (!hash) return 'unknown';
     if (hash === '#!/home' || hash === '#!/startup/home' || hash.endsWith('#!/')) return 'server-root';
+    if (isSearchView(hash)) return 'search';
     if (hash.includes('/collection?id=') || hash.includes('context=collections') ||
         (hash.includes('/item?id=') && hash.includes('context=collections'))) return 'collection';
     if (hash.includes('/list?id=') || hash.includes('/playlist?id=')) return 'collection';
@@ -8635,6 +13423,7 @@ animation: fadeIn 0.3s ease;
   function detectPageTypeJellyfin() {
     const hash = window.location.hash;
     if (!hash || hash === '#/' || hash.includes('#/home')) return 'server-root';
+    if (isSearchView(hash)) return 'search';
     if (hash.includes('#/details') && hash.includes('id=')) return 'item'; // could be collection too, resolved later by item Type
     if (hash.includes('#/movies') || hash.includes('#/tv') || hash.includes('#/music') ||
         hash.includes('#/shows') || hash.includes('topParentId=')) return 'folder';
@@ -8973,7 +13762,7 @@ animation: fadeIn 0.3s ease;
       Limit: limit.toString(),
       SortBy: 'SortName',
       SortOrder: 'Ascending',
-      Recursive: SERVER_TYPE === 'jellyfin' ? 'true' : 'false',
+      Recursive: (options.recursive || SERVER_TYPE === 'jellyfin') ? 'true' : 'false',
       Fields: 'Path,FileName,OriginalTitle,ProductionYear,Container,MediaType,Type,MediaSources',
       api_key: token
     });
@@ -9078,6 +13867,48 @@ animation: fadeIn 0.3s ease;
     const data = await fetchWithRetry(url);
     RequestCache.set(cacheKey, data);
     return Array.isArray(data.Items) ? data.Items : [];
+  }
+
+  async function fetchSearchItems(server, token, term, types, startIndex, limit) {
+    const prefix = apiPrefix();
+    const params = new URLSearchParams({
+      SearchTerm: term,
+      Recursive: 'true',
+      StartIndex: String(startIndex),
+      Limit: String(limit),
+      SortBy: 'SortName',
+      SortOrder: 'Ascending',
+      Fields: 'Path,FileName,OriginalTitle,ProductionYear,Container,MediaType,Type,MediaSources,SeriesName,ParentIndexNumber,IndexNumber',
+      api_key: token
+    });
+    if (types && types.length) params.append('IncludeItemTypes', types.join(','));
+    return await fetchWithRetry(`${server}${prefix}/Items?${params.toString()}`);
+  }
+
+  // Same paging contract as fetchAllFolderItems: keep going while the server
+  // hands back full pages, because TotalRecordCount is not always present.
+  async function fetchAllSearchItems(server, token, term, types, onProgress = null) {
+    const all = [];
+    let startIndex = 0;
+    let total = 0;
+    let gotFullBatch = false;
+
+    do {
+      if (abortController?.signal.aborted) throw new Error('Operation cancelled');
+
+      const data = await fetchSearchItems(server, token, term, types, startIndex, CONFIG.batchSize);
+      const items = data.Items || [];
+      if (!items.length) break;
+
+      all.push(...items);
+      total = data.TotalRecordCount || 0;
+      gotFullBatch = items.length === CONFIG.batchSize;
+      startIndex += items.length;
+
+      if (onProgress) onProgress(all.length, total, `Searching... ${all.length}/${total || '?'}`);
+    } while (gotFullBatch || (total && all.length < total));
+
+    return all;
   }
 
   async function fetchEpisodesREST(server, token, showId, seasonId) {
@@ -9412,6 +14243,112 @@ animation: fadeIn 0.3s ease;
 
     console.log(`[Debug] Extracted ${itemIds.length} item IDs from page:`, itemIds);
     return itemIds;
+  }
+
+  // Download everything the current search turned up, scoped to whichever tab
+  // is active. The tab matters: "Movies" yields files directly, but "Shows"
+  // yields Series, which are folders — those get expanded by ParentId so that
+  // e.g. every Digimon episode is included even though no episode title
+  // contains "Digimon".
+  async function processSearch(server, token) {
+    currentOperation = 'search';
+
+    if (SERVER_TYPE === 'plex') {
+      throw new Error('Search downloads are not supported on Plex yet. Open the movie, show, or collection page instead.');
+    }
+
+    const term = getSearchTerm();
+    if (!term) {
+      throw new Error('Could not read the search term. Type a search, wait for the results to appear, then press Download.');
+    }
+
+    const tab = getActiveSearchTab();
+    const types = tab.types;
+    console.log(`[Debug] Search "${term}" | tab: ${tab.label} | types: ${types ? types.join(',') : 'ALL'}`);
+
+    if (types && types.length === 0) {
+      throw new Error(`The "${tab.label}" tab has nothing downloadable in it. Switch to Movies, Shows, or Episodes.`);
+    }
+
+    updateProgress(0, 0, 'Searching...');
+    showNotification(`Searching for "${term}"...`, 'info', 2500);
+
+    const results = await fetchAllSearchItems(server, token, term, types, (c, t, msg) => updateProgress(c, t, msg));
+
+    if (!results.length) {
+      throw new Error(`No results for "${term}"${types ? ` in the ${tab.label} tab` : ''}.`);
+    }
+
+    console.log(`[Debug] Search returned ${results.length} items, types:`, [...new Set(results.map(i => i.Type))]);
+
+    const isDownloadable = (item) => {
+      if (!item || item.IsFolder) return false;
+      if (['Movie', 'Episode', 'Audio', 'Video', 'MusicVideo'].includes(item.Type)) return true;
+      return item.MediaType === 'Video' || item.MediaType === 'Audio';
+    };
+
+    let downloadableItems = results.filter(isDownloadable);
+
+    // Anything that is a container rather than a file gets walked.
+    const containers = results.filter(i =>
+      ['Series', 'Season', 'BoxSet', 'Collection', 'MusicAlbum'].includes(i.Type) || i.IsFolder
+    );
+
+    if (containers.length) {
+      showNotification(`Expanding ${containers.length} show(s)/collection(s)...`, 'info', 3000);
+    }
+
+    for (let i = 0; i < containers.length; i++) {
+      if (abortController?.signal.aborted) throw new Error('Operation cancelled');
+
+      const container = containers[i];
+      updateProgress(i, containers.length, `Expanding ${container.Type}: ${container.Name}`);
+
+      try {
+        // recursive:true so an Emby Series returns episodes, not just seasons.
+        const children = await fetchAllFolderItems(server, token, container.Id, null, { recursive: true });
+        const files = (children || []).filter(isDownloadable);
+        downloadableItems.push(...files);
+        console.log(`[Debug] ${container.Type} "${container.Name}" -> ${files.length} files`);
+      } catch (e) {
+        console.warn(`[PulseGrab] Could not expand ${container.Type} "${container.Name}":`, e.message);
+      }
+    }
+
+    downloadableItems = deduplicateItems(downloadableItems);
+
+    if (!downloadableItems.length) {
+      throw new Error(`Found ${results.length} search result(s) for "${term}" but none had a downloadable file.`);
+    }
+
+    const autoConfirm = Settings.get('autoConfirm');
+    if (!autoConfirm && downloadableItems.length > 20) {
+      return new Promise((resolve, reject) => {
+        const counts = downloadableItems.reduce((acc, it) => {
+          acc[it.Type || 'Other'] = (acc[it.Type || 'Other'] || 0) + 1;
+          return acc;
+        }, {});
+        const breakdown = Object.entries(counts).map(([t, n]) => `${n} ${t}`).join(', ');
+
+        const details = [
+          `Search: "${term}"${types ? ` (${tab.label} tab)` : ' (all types)'}`,
+          `${downloadableItems.length} total items to download`,
+          breakdown,
+          containers.length ? `Expanded from ${containers.length} show(s)/collection(s)` : 'Direct search results',
+          `Output format: ${CONFIG.outputFormats[Settings.get('outputFormat')]}`
+        ];
+
+        showConfirmDialog(
+          'Search Results',
+          details,
+          downloadableItems,
+          () => resolve(downloadableItems),
+          () => reject(new Error('User cancelled search download'))
+        );
+      });
+    }
+
+    return downloadableItems.map(item => ensureItemName(item));
   }
 
   async function processFolder(server, token, folderId) {
@@ -10259,6 +15196,12 @@ animation: fadeIn 0.3s ease;
             currentOperation = 'library';
             return await processLibrary(server, token, libraryId, itemInfo.Name || 'Library');
           }
+        }
+
+        // Search results have no parentId to walk, so query the API instead.
+        if (pageType === 'search') {
+          console.log('[Debug] Detected search results page - search download');
+          return await processSearch(server, token);
         }
 
         // Existing handlers

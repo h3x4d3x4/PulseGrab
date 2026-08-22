@@ -4,25 +4,73 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.0.10-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
 
-> **A powerful browser userscript that turns any Emby, Plex, or Jellyfin media server into a direct download hub.** Grab movies, TV shows, music, photos, and entire libraries — straight from the browser with zero extra software. Supports built-in concurrent downloads, JDownloader integration, wget/curl script generation, QR codes, and 10+ export formats.
+> **A powerful browser userscript that turns any Emby, Plex, or Jellyfin media server into a direct download hub.** Grab movies, TV shows, music, photos, and entire libraries — straight from the browser with zero extra software. Transfer server-to-server directly into your own NAS, or use built-in concurrent downloads, JDownloader integration, wget/curl script generation, QR codes, and 10+ export formats.
 
 **If PulseGrab saves you time, consider supporting development:**
 
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.0.10**
+## Current Version: **v1.2.0**
 
 **Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
 ---
 
 ## Changelog
+
+### v1.2.0
+**Guided setup, and a destination picker that knows your libraries.**
+
+* **Guided Setup wizard** — pick your transport and platform in plain language, then follow six steps that each *verify themselves*. It opens automatically if you hit Send with nothing configured. Covers TrueNAS, Unraid, Synology and plain Docker.
+* **TrueNAS one-click install** — paste a TrueNAS API key and PulseGrab deploys the whole thing itself: config folder, app, verification. No terminal at all. The key is **never stored** — it can create containers as root, so it is used for the install and discarded.
+* **One command on any other server** — a single block you paste into a shell. The compose file is self-contained: a throwaway init container writes aria2's config and the mover script on first start, so there is no `chmod`, no config editing and no restart afterwards. Works on Unraid, Synology, Debian, a Pi, a VPS.
+* **Reads your actual libraries** — point PulseGrab at your own Emby, Jellyfin or Plex and it discovers your real library names, types and paths. No more typing `Filmes` from memory, and no more guessing that a library called `Séries` lives at `/media/Series`.
+* **Folder browser** — navigate your server's real filesystem to pick a destination, with **+ New folder** for creating one (it's created when the first file lands). Requires an admin API key for Emby/Jellyfin; library discovery works with any key.
+* **Sorting rules** — `Anime => Anime Series` sends anything matching "Anime" there. Content type is corrected automatically against your discovered libraries, so with an `Anime Filmes`/`Anime Series` pair a single rule routes films and episodes to the right half.
+* **Remembers where each show goes** — send season 2 of something and the picker is already filled in with where season 1 went. Keyed on the series, so it follows the show across source servers. Mixed batches still ask.
+* **Warns about split libraries** — if a show already exists somewhere else on your server, the picker says so before you scatter it across two folders.
+* **Pinned folders** — star the ones you use constantly and they sort first everywhere.
+* **Choose what to send** — a dedicated selection dialog with tri-state ticking at series, season and individual-item level, plus search, running count and total size. Kept deliberately separate from the Download Manager, whose Start buttons pull files to *your computer*.
+* **Folder Per Film toggle** — libraries that keep films loose in the library root instead of one folder per film are now matched rather than fought.
+* **Collision check reads files, not just folders** — it normalises titles (stripping extensions and release tags like `1080p`, `BluRay`, `x264`) so `Dune.2021.1080p.BluRay.mkv` is recognised as `Dune (2021)`, and it tells you what the existing copy is called.
+* **Duplicate sends are skipped** — re-sending a season no longer produces a batch of "File exists, but a control file does not exist" failures; already-queued files are detected and dropped.
+* **Jellyfin and Plex support** for discovery and browsing. Jellyfin uses the `Authorization` header rather than the deprecated `api_key` query parameter, so it won't break when that is removed.
+* **Escape closes dialogs** — and only the topmost, so closing the folder browser doesn't discard the destination picker underneath it.
+* Fixes: `host:port` typed without a scheme now tries HTTP before HTTPS instead of assuming TLS; the aria2 connection test detects and corrects a wrong HTTPS setting; failed setup checks no longer overwrite a working configuration; and the mover script now lives in `/config/script/`, because the aria2 image resets permissions on `/config/*` at every start and was silently stripping its execute bit.
+
+### v1.1.0
+**Send to My Server — server-to-server transfers.** Pull media from someone else's Emby/Plex/Jellyfin straight into your own NAS. The files never pass through your browser or your computer: PulseGrab hands the link list to a downloader on your box, which fetches the media itself at full server speed. Close the tab, shut the laptop — the transfer keeps running.
+
+Two transports, chosen in **Settings → My Server**:
+
+| | **MyJDownloader** (default) | **aria2** |
+|---|---|---|
+| Server setup | Install JDownloader, sign in | Container + hook script |
+| Open ports / firewall | **None** | RPC port on your LAN |
+| Works away from home | **Yes** | LAN or VPN only |
+| Partial-file handling | Automatic (`.part` files) | Staging folder + move hook |
+| Live progress in PulseGrab | In JDownloader / my.jdownloader.org | **Full in-page panel** |
+| Links leave your network | Via JD's encrypted relay | **Never** |
+
+* **MyJDownloader — zero server-side setup.** Enter your My.JDownloader email and password, click Connect, pick your machine, set a destination folder. No ports to open, no firewall rules, no hook script, and it works even when you're not on the same network as your NAS. Files are grouped into one package per destination folder, so `destinationFolder` places each season and movie exactly where it belongs. **Your password is never stored** — only the two SHA-256 secrets derived from it, which can't be reversed back into it. Sessions that lapse are re-established transparently.
+* **One-click send** — a new **Send to My Server** button in the results dialog. Works because PulseGrab's download URLs carry their auth in the query string (`api_key=` / `X-Plex-Token=`), so they're self-contained and need no header forwarding.
+* **Lands in your library, correctly foldered** — reuses the existing naming templates and folder logic, so files arrive as `TV Shows/<Series>/<Season>/…`, `Movies/<Title> (<Year>)/…`, `Music/<Artist>/<Album>/…` — already Emby-shaped and ready to scan.
+* **No half-finished episodes in your library** — downloads land in a hidden `.pulsegrab-incoming/` staging folder (media servers skip dot-prefixed directories), and a shipped `on-download-complete` hook moves each file into place the instant it finishes. Because staging lives inside the library dataset, the move is an atomic rename.
+* **External subtitles come along** — each item's `.srt`/`.ass` tracks are queued alongside the video and land in the same folder, matching what the built-in manager does. (`dlExternalSubtitles` is on by default, so skipping them would have silently dropped subs for most users.)
+* **Live transfer panel** — overall progress, aggregate speed, ETA, per-file bars, and per-file error messages, polled from aria2. Progress is weighted per file, so it doesn't spike to 100% on the first item and collapse as the rest report their sizes. Queueing a second batch folds into the open panel rather than orphaning the first. Cancel-remaining included; closing the panel doesn't stop the transfer.
+* **Download history is recorded as files land**, so **Skip already downloaded** works for server transfers too — and a transfer you close the tab on still records whatever arrived before you left.
+* **Errors that tell you what's actually wrong** — before queueing the full batch, PulseGrab sends one probe item and watches it. If your server can't resolve or reach the source, you get *"`<your-server>` can't reach `<source>` — this transfer runs server-to-server, not through this browser"* instead of 400 silent failures. Expired session tokens and loopback-only media server addresses are detected and named explicitly too.
+* **Generated setup, matched to your settings** — **Settings → My Server** has copy buttons for a ready-to-paste Docker Compose file (TrueNAS: Apps → Discover → Custom App → Install via YAML) and the move hook, both filled in with the port, secret, and library path you entered. **Test Connection** verifies aria2 answers *and* warns if the move hook isn't installed.
+* **Library-safe defaults** — `auto-file-renaming=false` so a re-queue never litters `S01E01.1.mkv` next to the real file, and one connection per source server by default so you don't hammer a box you don't own.
+* **Robust inputs** — the server address accepts anything you'd paste (`truenas.local`, `192.168.1.50:6800`, `http://nas/`, IPv6 literals), and the generated compose/hook snippets are properly quoted, so secrets containing `:` or `#` and library paths containing spaces don't corrupt them. Items with no resolvable download URL are counted and reported instead of failing opaquely.
+* **JDownloader can now target a remote host** — the previously hardcoded `127.0.0.1`/`localhost` is now a **JDownloader Host** setting, so the JDownloader2 app on a NAS works too. Note that JDownloader binds its FlashGot listener to loopback by default; the remote instance needs `ExternInterfaceLocalhostOnly` set to false in Advanced Settings first.
+* Added `@connect *` for user-configured server addresses — Tampermonkey asks once per host and offers "Always allow all domains".
 
 ### v1.0.10
 Full audit pass across Emby, Plex, and Jellyfin — bug fixes, correctness, and polish.
@@ -120,9 +168,13 @@ PulseGrab auto-detects which server you're using and adapts its API calls, URL c
 
 ## Key Features
 
+### Server-to-Server Transfer
+Pull media from any server you have access to straight into your own NAS — the files never pass through your browser or computer. Via **MyJDownloader** there is nothing to configure on your server at all: no open ports, no firewall rules, and it works from anywhere. Power users can point PulseGrab at an **aria2** daemon instead for a fully local transfer with live in-page progress. Either way files arrive already foldered for Emby/Jellyfin/Plex, external subtitles included, and your library never sees a half-finished episode. Close the tab; the transfer keeps running.
+
 ### Download Methods
 | Method | Description |
 |--------|-------------|
+| **Send to My Server** | Server-to-server transfer straight into your own NAS via aria2 — bytes never touch your browser or computer |
 | **Built-in Manager** | Concurrent in-browser downloads with pause, resume, retry, and progress tracking |
 | **JDownloader** | One-click send to a running JD2 instance via local API socket |
 | **wget / curl Scripts** | Generate ready-to-run terminal scripts (`.bat`, `.command`, `.sh`) with correct filenames |
@@ -178,7 +230,9 @@ The built-in browser downloader provides a complete download experience:
 | **General Basics** | Button position, default output format, batch size, concurrent downloads (1–5), auto-confirm, rate limiting, debug logging |
 | **Appearance** | Accent theme (Auto / Emby / Plex / Jellyfin / Ocean), dark mode, compact view |
 | **Filters & History** | Download history tracking, skip-downloaded, exclude extras, quality preset floor (Any / 720p / 1080p / 4K+), file-size min/max thresholds |
-| **JDownloader** | Enable/disable local API socket, auto-detect, custom port |
+| **My Server** | Guided Setup wizard; transfer method (MyJDownloader / aria2); MyJD email, password, device picker, destination folder with Browse; aria2 address, RPC port, secret, HTTPS toggle, library path, connections per file, live panel toggle, connection test, generated compose/hook snippets |
+| **Naming Templates** | Filename macros; connect your own server for library discovery; per-type library folders with Browse; folder-per-film toggle; pinned folders; sorting rules; ask-before-each-transfer toggle |
+| **JDownloader** | Enable/disable local API socket, auto-detect, custom host, custom port |
 | **Naming Templates** | Customizable episode and movie filename macros with substitution tokens |
 | **Subtitles** | External subtitle downloads, language selection grid |
 | **Updates** | Auto-check toggle, check interval, manual check button |
@@ -219,6 +273,26 @@ PulseGrab/
 ---
 
 ## Common Use Cases
+
+### Transfer From Someone Else's Server Into Your Own NAS — the easy way
+
+1. Install **JDownloader2** on your NAS — on TrueNAS it's a one-click app under **Apps → Discover**. Open it and sign in under **Settings → My.JDownloader** (free account at `my.jdownloader.org`).
+2. In PulseGrab: **Settings → My Server**, enter the same email and password, click **Connect & List Devices**, pick your machine, and set the destination folder (your library root as the JDownloader machine sees it).
+
+That's it — no ports, no config files. Now on any Emby/Plex/Jellyfin server you have access to: **Get Links → Send to My Server**.
+
+### …or with aria2 (fully local, live progress)
+
+One-time setup on the destination box (example: TrueNAS running Emby):
+
+1. **Settings → My Server** in PulseGrab — enter your NAS address, an RPC port (6800), a secret, and the library path *as seen inside the aria2 container* (e.g. `/downloads`).
+2. Click **Copy compose YAML**, then on TrueNAS go to **Apps → Discover → Custom App → Install via YAML** and paste it. Point the library volume at your media dataset and set `PUID`/`PGID` to the user Emby runs as (`568:568` on TrueNAS) so Emby can read the files.
+3. Click **Copy hook script**, save it as `/config/pulsegrab-move.sh`, `chmod +x` it, and add `on-download-complete=/config/pulsegrab-move.sh` to `/config/aria2.conf`.
+4. Restart the app and hit **Test Connection**.
+
+Then, from any Emby/Plex/Jellyfin server you have access to: click **Get Links**, then **Send to My Server**. Files transfer directly from that server to yours, arriving correctly foldered in your library. You can close the browser.
+
+> **The destination needs its own route to the source.** The transfer does not go through your browser, so a media server that only your laptop can reach (VPN-only, or a LAN address your NAS can't see) won't work. PulseGrab probes one file first and tells you explicitly if this is the problem.
 
 ### Download an Entire TV Series
 1. Navigate to the TV show page on your Emby, Plex, or Jellyfin server
