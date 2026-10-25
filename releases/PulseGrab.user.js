@@ -1022,7 +1022,7 @@
       }] : [],
 
       _plexPartKey: part?.key || null,
-      _plexMedia: plexItem.Media || [], // Preserve all media versions for multi-version selector
+      _plexMedia: plexItem.Media || [], // all versions (primarySource picks one)
 
       UserData: { Played: (plexItem.viewCount || 0) > 0 },
       CanDownload: true,
