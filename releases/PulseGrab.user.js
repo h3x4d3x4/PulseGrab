@@ -691,12 +691,7 @@
     export() {
       const history = this.getAll();
       const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `pulse-download-history-${new Date().toISOString().split('T')[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, `pulse-download-history-${new Date().toISOString().split('T')[0]}.json`);
       showNotification('History exported', 'success', 2000);
     },
 
@@ -1234,6 +1229,18 @@
 
   // Media titles routinely contain &, <, and quotes — escape before interpolating
   // them into any innerHTML template.
+  // Save a Blob through a temporary <a download> link.
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function escapeHtml(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -5934,14 +5941,7 @@ echo "============================================================"
 
     // Create downloadable file
     const blob = new Blob([scriptContent], { type: fileType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    saveBlob(blob, filename);
 
     console.log(`[SUCCESS] ${platform.toUpperCase()} rename script downloaded: ${filename}`);
   }
@@ -6085,14 +6085,7 @@ echo ""
 
     // Create downloadable file
     const blob = new Blob([scriptContent], { type: fileType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    saveBlob(blob, filename);
 
     // Show instructions
     let instructions;
@@ -8097,9 +8090,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
         item._savedChunks = null;
         item._savedReceivedLength = 0;
         const blob = new Blob(chunks);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
 
         // Try to get filename from Content-Disposition header, fall back to our generated filename
         let filename = item.downloadInfo.filename;
@@ -8115,11 +8105,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           }
         }
 
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        saveBlob(blob, filename);
 
         item.status = 'completed';
         item.progress = 100;
@@ -8130,12 +8116,10 @@ Note: If blocked, right-click → Open, or run in Terminal:
         if (item.downloadInfo && item.downloadInfo.subtitles && item.downloadInfo.subtitles.length > 0) {
           for (const sub of item.downloadInfo.subtitles) {
             try {
-              const subLink = document.createElement('a');
-              subLink.href = sub.url;
-              subLink.download = sub.filename;
-              document.body.appendChild(subLink);
-              subLink.click();
-              document.body.removeChild(subLink);
+              // <a download> is ignored cross-origin, so fetch the (small) file and save the blob
+              const subResp = await fetch(sub.url);
+              if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
+              saveBlob(await subResp.blob(), sub.filename);
               await new Promise(r => setTimeout(r, 500)); // Small delay between downloads
             } catch (e) {
               console.warn('Failed to download subtitle:', sub.filename, e);
@@ -11193,12 +11177,7 @@ animation: fadeIn 0.3s ease;
     };
 
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `pulse-grab-config-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, `pulse-grab-config-${new Date().toISOString().split('T')[0]}.json`);
 
     showNotification('Configuration exported successfully!', 'success', 2000);
   }
