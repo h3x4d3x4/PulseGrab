@@ -346,36 +346,46 @@
       updateCheckInterval: 24  // hours
     },
 
-    get(key) {
-      try {
-        let stored = GM_getValue('pulse_dl_settings', '{}');
-        let settings = JSON.parse(stored);
+    // get() is called per item in every formatter and in buildDownloadInfo, so
+    // re-parsing the stored blob each time cost ~100k JSON.parse calls on a big
+    // library. Cache the parse briefly; the short lifetime still picks up a save
+    // made in another tab.
+    _cache: null,
+    _cacheAt: 0,
 
-        return settings[key] !== undefined ? settings[key] : this.defaults[key];
-      } catch {
-        return this.defaults[key];
-      }
+    _stored() {
+      if (this._cache && Date.now() - this._cacheAt < 2000) return this._cache;
+      let parsed = {};
+      try {
+        parsed = JSON.parse(GM_getValue('pulse_dl_settings', '{}'));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
+      } catch (e) { parsed = {}; }
+      this._cache = parsed;
+      this._cacheAt = Date.now();
+      return parsed;
+    },
+
+    get(key) {
+      const settings = this._stored();
+      return settings[key] !== undefined ? settings[key] : this.defaults[key];
     },
 
     set(key, value) {
       try {
-        const stored = GM_getValue('pulse_dl_settings', '{}');
-        const settings = JSON.parse(stored);
+        // Re-read before writing so a change saved in another tab isn't clobbered.
+        this._cache = null;
+        const settings = { ...this._stored() };
         settings[key] = value;
         GM_setValue('pulse_dl_settings', JSON.stringify(settings));
+        this._cache = settings;
+        this._cacheAt = Date.now();
       } catch (e) {
         console.warn('Failed to save setting:', e);
       }
     },
 
     getAll() {
-      try {
-        const stored = GM_getValue('pulse_dl_settings', '{}');
-        const settings = JSON.parse(stored);
-        return { ...this.defaults, ...settings };
-      } catch {
-        return { ...this.defaults };
-      }
+      return { ...this.defaults, ...this._stored() };
     }
   };
 
@@ -388,6 +398,7 @@
     if (removed.length) {
       removed.forEach(k => delete stored[k]);
       GM_setValue('pulse_dl_settings', JSON.stringify(stored));
+      Settings._cache = null;
     }
     (typeof GM_listValues === 'function' ? GM_listValues() : [])
       .filter(k => k.startsWith('pulse_dl_progress_')).forEach(k => GM_deleteValue(k));
@@ -593,14 +604,23 @@
 
     // Safe read: corrupted/truncated storage (e.g. after a quota-limited write)
     // must never throw and break the scan flow.
+    // Cached briefly for the same reason as Settings: isDownloaded() runs per item.
+    // Not copied: the only mutating callers (mark, _write) write the same object back.
+    _cache: null,
+    _cacheAt: 0,
+
     _read() {
-      try {
-        const parsed = JSON.parse(GM_getValue('pulse_dl_history', '{}'));
-        return (parsed && typeof parsed === 'object') ? parsed : {};
-      } catch (e) {
-        console.warn('[History] Corrupted history, resetting:', e.message);
-        return {};
+      if (!this._cache || Date.now() - this._cacheAt > 2000) {
+        try {
+          const parsed = JSON.parse(GM_getValue('pulse_dl_history', '{}'));
+          this._cache = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+        } catch (e) {
+          console.warn('[History] Corrupted history, resetting:', e.message);
+          this._cache = {};
+        }
+        this._cacheAt = Date.now();
       }
+      return this._cache;
     },
 
     // Cap growth: evict oldest entries by date so storage can't grow unbounded
@@ -615,6 +635,8 @@
             .forEach(k => delete history[k]);
         }
         GM_setValue('pulse_dl_history', JSON.stringify(history));
+        this._cache = history;
+        this._cacheAt = Date.now();
       } catch (e) {
         console.warn('[History] Failed to write history:', e.message);
       }
@@ -654,6 +676,7 @@
 
     clear() {
       GM_setValue('pulse_dl_history', '{}');
+      this._cache = null;
       logDebug('Download history cleared');
       showNotification('Download history cleared', 'info', 2000);
     },
