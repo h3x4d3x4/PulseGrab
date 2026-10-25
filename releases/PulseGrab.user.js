@@ -6238,7 +6238,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     }
   }
 
-  function showDownloadManager(items, server, token) {
+  async function showDownloadManager(items, server, token) {
     // Request notification permission
     requestNotificationPermission();
     // Try to restore previous state if available
@@ -6303,10 +6303,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
         item.status === 'pending' || item.status === 'paused' || item.status === 'downloading'
       ).length;
 
-      const resume = confirm(
-        `You have ${incompleteCount} incomplete download(s) from a previous session (${previousCount} total items).\n\n` +
-        `Click OK to RESUME previous downloads.\n` +
-        `Click Cancel to START FRESH with ${items.length} new item(s).`
+      const resume = await askConfirm(
+        'Resume previous downloads?',
+        [
+          `You have ${incompleteCount} incomplete download(s) from a previous session (${previousCount} total items).`,
+          `Resume keeps them. Start fresh uses the ${items.length} new item(s) instead.`
+        ],
+        'Resume', 'Start fresh'
       );
 
       if (resume) {
@@ -7848,7 +7851,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       startNextDownload();
     });
 
-    manager.querySelector('#cancel-all').addEventListener('click', () => {
+    manager.querySelector('#cancel-all').addEventListener('click', async () => {
       const incompleteCount = downloadQueue.filter(item =>
         item.status === 'pending' || item.status === 'paused' || item.status === 'downloading'
       ).length;
@@ -7858,10 +7861,11 @@ Note: If blocked, right-click → Open, or run in Terminal:
         return;
       }
 
-      const confirmed = confirm(
-        `Cancel all ${incompleteCount} pending/paused downloads?\n\n` +
-        `This will stop any active downloads and remove all incomplete items from the queue.\n` +
-        `Completed downloads will not be affected.`
+      const confirmed = await askConfirm(
+        `Cancel all ${incompleteCount} pending/paused downloads?`,
+        ['This will stop any active downloads and remove all incomplete items from the queue.',
+         'Completed downloads will not be affected.'],
+        'Cancel all', 'Keep them'
       );
 
       if (!confirmed) return;
@@ -7898,7 +7902,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       manager.querySelector('#download-selected').click();
     });
 
-    manager.querySelector('#bulk-remove').addEventListener('click', () => {
+    manager.querySelector('#bulk-remove').addEventListener('click', async () => {
       const selected = downloadQueue.filter(i => i.selected);
       if (selected.length === 0) return;
 
@@ -7906,7 +7910,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         showNotification('Pause downloads before removing items', 'warning', 2500);
         return;
       }
-      if (confirm(`Remove ${selected.length} selected item(s) from the queue?`)) {
+      if (await askConfirm(`Remove ${selected.length} item(s)?`, ['They will be removed from the queue.'], 'Remove', 'Keep')) {
         downloadQueue = downloadQueue.filter(i => !i.selected);
         userAbortedIndices.clear(); // indices shifted
         renderQueue(true); // Queue structure changed
@@ -8021,9 +8025,9 @@ Note: If blocked, right-click → Open, or run in Terminal:
       });
     }
 
-    manager.querySelector('#close-manager').addEventListener('click', () => {
+    manager.querySelector('#close-manager').addEventListener('click', async () => {
       if (isDownloading) {
-        if (confirm('Downloads are in progress. Close anyway? Progress will be saved and you can resume later.')) {
+        if (await askConfirm('Close the Download Manager?', ['Downloads are in progress. Progress will be saved and you can resume later.'], 'Close anyway', 'Keep downloading')) {
           isPaused = true;
           abortAllActive();
           saveState();
@@ -8034,10 +8038,10 @@ Note: If blocked, right-click → Open, or run in Terminal:
       }
     });
 
-    overlay.addEventListener('click', (e) => {
+    overlay.addEventListener('click', async (e) => {
       if (e.target === overlay) {
         if (isDownloading) {
-          if (confirm('Downloads are in progress. Close anyway? Progress will be saved and you can resume later.')) {
+          if (await askConfirm('Close the Download Manager?', ['Downloads are in progress. Progress will be saved and you can resume later.'], 'Close anyway', 'Keep downloading')) {
             isPaused = true;
             abortAllActive();
             saveState();
@@ -8182,7 +8186,9 @@ Note: If blocked, right-click → Open, or run in Terminal:
     listView.appendChild(kbHint);
 
     // Keyboard shortcuts for download manager
-    const keyboardHandler = (e) => {
+    const keyboardHandler = async (e) => {
+      // A confirm dialog on top owns the keyboard (its own Escape handler closes it)
+      if (document.querySelector('.pg-overlay-nav')) return;
       // Ignore if typing in input field
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         // Only handle Escape in input fields
@@ -8222,7 +8228,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
               showNotification('Pause downloads before removing items', 'warning', 2500);
               break;
             }
-            if (confirm(`Remove ${selected.length} selected item(s) ? `)) {
+            if (await askConfirm(`Remove ${selected.length} item(s)?`, ['They will be removed from the queue.'], 'Remove', 'Keep')) {
               downloadQueue = downloadQueue.filter(i => !i.selected);
               userAbortedIndices.clear(); // indices shifted
               renderQueue(true); // Queue structure changed
@@ -8289,8 +8295,10 @@ Note: If blocked, right-click → Open, or run in Terminal:
       // Only prompt if last update was within 1 hour
       if (timeSinceUpdate < 3600000) {
         const nextIndex = downloadQueue.findIndex(i => i.status === 'pending' || i.status === 'paused');
-        if (nextIndex !== -1 && confirm('Resume previous downloads?')) {
-          setTimeout(() => downloadItem(nextIndex), 1000);
+        if (nextIndex !== -1) {
+          askConfirm('Resume previous downloads?', ['Continue the downloads that were interrupted.'], 'Resume', 'Not now').then((ok) => {
+            if (ok) setTimeout(() => downloadItem(nextIndex), 1000);
+          });
         }
       }
     }
@@ -9886,9 +9894,9 @@ animation: fadeIn 0.3s ease;
     panel.querySelector('#view-history').addEventListener('click', showHistoryDialog);
     panel.querySelector('#export-history').addEventListener('click', () => DownloadHistory.export());
     panel.querySelector('#clear-history').addEventListener('click', () => {
-      if (confirm('Are you sure you want to clear all download history? This cannot be undone.')) {
-        DownloadHistory.clear();
-      }
+      askConfirm('Clear history?', ['This removes every entry from your download history. It cannot be undone.'], 'Clear history', 'Cancel').then((ok) => {
+        if (ok) DownloadHistory.clear();
+      });
     });
 
     // Export/Import config
@@ -10465,13 +10473,14 @@ animation: fadeIn 0.3s ease;
     showNotification('Settings reset to defaults', 'info', 2000);
   }
 
-  function exportConfiguration() {
+  async function exportConfiguration() {
     const settings = { ...Settings.getAll() };
     delete settings.destLibrariesCache; // re-derivable
     // Passwords and API keys stay out of the file unless the user asks for them.
-    const includeSecrets = confirm(
-      'Include passwords and API keys in the exported file?\n\nOnly do this for your own backup. ' +
-      'Press Cancel to export without them.'
+    const includeSecrets = await askConfirm(
+      'Include passwords and API keys?',
+      ['Only do this for your own backup.', 'Choose "Leave out" to export without them.'],
+      'Include', 'Leave out'
     );
     if (!includeSecrets) {
       ['destApiKey', 'remoteSecret', 'myjdLoginSecret', 'myjdDeviceSecret'].forEach(key => delete settings[key]);
@@ -10515,8 +10524,9 @@ animation: fadeIn 0.3s ease;
 
         // Import history if present
         if (config.history && Object.keys(config.history).length > 0) {
-          const shouldImportHistory = confirm(
-            `Import ${Object.keys(config.history).length} history entries?\n\nThis will merge with your existing history.`
+          const shouldImportHistory = await askConfirm(
+            `Import ${Object.keys(config.history).length} history entries?`,
+            ['They will be merged with your existing history.'], 'Import', 'Skip'
           );
           if (shouldImportHistory) {
             DownloadHistory.import(JSON.stringify(config.history));
@@ -11153,7 +11163,9 @@ animation: fadeIn 0.3s ease;
     dismissTimer = setTimeout(dismiss, duration);
   }
 
-  function showConfirmDialog(title, details, items, onConfirm, onCancel) {
+  // items = null skips the size block. options: { warning (string; '' hides the box, default is
+  // the long-scan warning), okLabel, cancelLabel, hideOk }.
+  function showConfirmDialog(title, details, items, onConfirm, onCancel, options = {}) {
     const overlay = document.createElement('div');
     overlay.className = 'pg-overlay pg-overlay-nav';
     overlay.style.cssText = `
@@ -11192,8 +11204,11 @@ animation: fadeIn 0.3s ease;
     // Calculate file size information
     const sizeInfo = calculateTotalSize(items || []);
     const sizeDetails = [];
+    const warning = options.warning === undefined ? 'This may take a while and generate a very long list of links.' : options.warning;
 
-    if (sizeInfo.totalSize > 0) {
+    if (items === null) {
+      // no size block
+    } else if (sizeInfo.totalSize > 0) {
       sizeDetails.push(`Total size: ${formatFileSize(sizeInfo.totalSize)}${sizeInfo.hasEstimates ? ' (estimated)' : ''}`);
       if (sizeInfo.itemsWithSize < items.length) {
         sizeDetails.push(`${sizeInfo.itemsWithSize}/${items.length} items have size information`);
@@ -11250,7 +11265,7 @@ animation: fadeIn 0.3s ease;
         `).join('')}
                         </div>
 
-                        <div style="
+                        ${warning ? `<div style="
         padding: 12px;
         background: #fef3c7;
         border-radius: 6px;
@@ -11265,9 +11280,9 @@ animation: fadeIn 0.3s ease;
           gap: 6px;
         ">
                             ${Icons.alert}
-                            This may take a while and generate a very long list of links.
+                            ${escapeHtml(warning)}
                           </div>
-                        </div>
+                        </div>` : ''}
 
                         <div style="
         display: flex;
@@ -11284,7 +11299,7 @@ animation: fadeIn 0.3s ease;
           cursor: pointer;
           font: 500 14px system-ui, sans-serif;
           transition: all 0.2s ease;
-        ">Cancel</button>
+        ">${escapeHtml(options.cancelLabel || 'Cancel')}</button>
                           <button id="confirm-proceed" style="
           padding: 10px 20px;
           border: none;
@@ -11298,8 +11313,8 @@ animation: fadeIn 0.3s ease;
           align-items: center;
           gap: 6px;
         ">
-                            ${Icons.download}
-                            Continue
+                            ${options.okLabel ? '' : Icons.download}
+                            ${escapeHtml(options.okLabel || 'Continue')}
                           </button>
                         </div>
                         `;
@@ -11336,6 +11351,14 @@ animation: fadeIn 0.3s ease;
     document.body.appendChild(overlay);
 
     setTimeout(() => dialog.querySelector('#confirm-proceed').focus(), 100);
+  }
+
+  // Promise wrapper around showConfirmDialog for yes/no questions (no size block, no warning).
+  function askConfirm(title, lines, okLabel = 'OK', cancelLabel = 'Cancel') {
+    return new Promise((resolve) => {
+      showConfirmDialog(title, lines, null, () => resolve(true), () => resolve(false),
+        { warning: '', okLabel, cancelLabel });
+    });
   }
 
   // Options dialog for whole server download
@@ -11488,6 +11511,7 @@ animation: fadeIn 0.3s ease;
                           </div>
                         </div>
 
+                        <div id="server-dl-error" role="alert" style="display: none; color: #dc2626; font-size: 13px; margin-bottom: 12px; text-align: right;"></div>
                         <div style="display: flex; justify-content: flex-end; gap: 12px;">
                           <button id="server-dl-cancel" style="padding: 10px 20px; border: 1px solid ${isDark ? '#4b5563' : '#d1d5db'}; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; font-weight: 500;">Cancel</button>
                           <button id="server-dl-start" style="padding: 10px 24px; border: none; border-radius: 8px; background: ${getTheme().primary}; color: white; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px;">
@@ -11529,7 +11553,9 @@ animation: fadeIn 0.3s ease;
       };
 
       if (selectedLibIds.length === 0) {
-        alert('Please select at least one library.');
+        const err = dialog.querySelector('#server-dl-error');
+        err.textContent = 'Please select at least one library.';
+        err.style.display = 'block';
         return;
       }
 
