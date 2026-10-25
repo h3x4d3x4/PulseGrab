@@ -204,7 +204,6 @@
     cacheTTL: 300000,  // Cache TTL: 5 minutes (300000ms)
     enableRequestCache: true,
     concurrentDownloads: 3,  // Number of simultaneous downloads in Download Manager
-    enableBackgroundPrefetch: true,
     outputFormats: {
       'links': 'Plain URLs',
       'wget': 'Wget Script',
@@ -306,7 +305,6 @@
       enableParallelFetching: true,
       parallelSeasonFetches: 5,
       concurrentDownloads: 3,  // NEW v6.54: Changed default from 2 to 3
-      enableBackgroundPrefetch: true,
       filterOptions: {
         minQuality: null,  // '720p', '1080p', '4K'
         maxFileSize: null, // in GB
@@ -8134,7 +8132,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         item.status = 'completed';
         item.progress = 100;
         // History records real downloads only (not scans)
-        DownloadHistory.mark([item.downloadInfo?._rawItem || { Id: item.id, Name: item.name, Type: item.downloadInfo?.type, Size: item.size }]);
+        DownloadHistory.mark([item.downloadInfo?._rawItem || { Id: item.id, Name: item.name, Size: item.size }]);
 
         // NEW v6.59: Download Subtitles
         if (item.downloadInfo && item.downloadInfo.subtitles && item.downloadInfo.subtitles.length > 0) {
@@ -15928,11 +15926,6 @@ animation: fadeIn 0.3s ease;
         startJDownloaderDetection();
       }
 
-      // NEW v6.55: Background pre-fetching (Disabled by default to prevent UI hangs)
-      if (Settings.get('enableBackgroundPrefetch') === true) {
-        startBackgroundPrefetch();
-      }
-
       console.log(`PulseGrab v${SCRIPT_VERSION} loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!`);
 
       // Auto-check for updates
@@ -15948,71 +15941,6 @@ animation: fadeIn 0.3s ease;
         }).catch(() => { /* silent */ });
       }
     }, 1000);
-  }
-
-  // NEW v6.55: Background Pre-fetching
-  let prefetchInProgress = false;
-  let prefetchedData = null;
-  let prefetchPageId = null;
-
-  async function startBackgroundPrefetch() {
-    if (prefetchInProgress) return;
-
-    try {
-      const pageType = detectPageType();
-
-      // Only prefetch for folder, collection, and show pages
-      if (!['folder', 'collection', 'item'].includes(pageType)) {
-        return;
-      }
-
-      const pageId = getCurrentFolderId();
-      if (!pageId) return;
-
-      // Check if we already prefetched this page
-      if (prefetchPageId === pageId && prefetchedData) {
-        console.log('[Prefetch] Already prefetched this page');
-        return;
-      }
-
-      console.log(`[Prefetch] Starting background prefetch for ${pageType} (${pageId})`);
-      prefetchInProgress = true;
-      prefetchPageId = pageId;
-
-      const { server, token } = getServerAndToken();
-      if (!server || !token) {
-        console.log('[Prefetch] No server/token available');
-        prefetchInProgress = false;
-        return;
-      }
-
-      // Prefetch in background (don't await)
-      setTimeout(async () => {
-        try {
-          // Use cache if available
-          const cacheKey = RequestCache.makeKey(`${server}${apiPrefix()}/Items`, { ParentId: pageId });
-          let data = RequestCache.get(cacheKey);
-
-          if (!data) {
-            // Fetch and cache silently
-            const items = await fetchAllFolderItems(server, token, pageId, null, { silent: true });
-            prefetchedData = items;
-            console.log(`[Prefetch] Prefetched ${items.length} items for quick access`);
-          } else {
-            prefetchedData = data;
-            console.log(`[Prefetch] Using cached data (${data.length} items)`);
-          }
-        } catch (error) {
-          console.log('[Prefetch] Failed:', error.message);
-        } finally {
-          prefetchInProgress = false;
-        }
-      }, 2000); // Wait 2 seconds after page load
-
-    } catch (error) {
-      console.log('[Prefetch] Error:', error.message);
-      prefetchInProgress = false;
-    }
   }
 
   function cleanup() {
@@ -16048,18 +15976,9 @@ animation: fadeIn 0.3s ease;
       // Cleanup previous page state
       cleanup();
 
-      // Clear prefetch state
-      prefetchedData = null;
-      prefetchPageId = null;
-
       // Re-initialize after a short delay to allow DOM to settle
       setTimeout(() => {
         initialize();
-
-        // Trigger prefetch if enabled
-        if (Settings.get('enableBackgroundPrefetch')) {
-          startBackgroundPrefetch();
-        }
       }, 500);
     }
   }).observe(document, { subtree: true, childList: true });
