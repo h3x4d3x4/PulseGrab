@@ -4394,34 +4394,6 @@ echo "   Library path   : /downloads"
       .replace(/"/g, '\\"') + '"';
   }
 
-  function remoteComposeYaml() {
-    const port = Settings.get('remotePort') || CONFIG.remote.defaultPort;
-    const secret = Settings.get('remoteSecret') || 'change-me';
-    const library = (Settings.get('remoteLibraryDir') || '/downloads').replace(/\/+$/, '');
-
-    return `services:
-  aria2:
-    image: p3terx/aria2-pro
-    container_name: pulsegrab-aria2
-    restart: unless-stopped
-    environment:
-      # Match the user/group Emby runs as, or Emby won't be able to read the files.
-      # On TrueNAS the apps user is normally 568:568.
-      - PUID=568
-      - PGID=568
-      - UMASK_SET=022
-      - ${yamlQuote(`RPC_SECRET=${secret}`)}
-      - ${yamlQuote(`RPC_PORT=${port}`)}
-    ports:
-      - "${port}:${port}"
-    volumes:
-      - /mnt/tank/apps/aria2/config:/config
-      # Left side: the dataset holding your Emby library.
-      # Right side must match "Library path" in PulseGrab settings.
-      - ${yamlQuote(`/mnt/tank/media:${library}`)}
-`;
-  }
-
   function remoteHookScript() {
     const library = (Settings.get('remoteLibraryDir') || '/downloads').replace(/\/+$/, '');
     const staging = remoteStagingRoot();
@@ -5547,174 +5519,52 @@ exit 0
     return `${hours}h ${minutes}m`;
   }
 
-  // ---------- wget/curl Script Generator ----------
+  // ---------- wget/PowerShell script file ----------
+  // Saves the wget (macOS/Linux) or PowerShell (Windows) formatter output as a runnable file.
   function generateWgetCurlScript(items, server, token, packageName) {
     const uniqueItems = deduplicateItems(items);
-    const downloadInfo = uniqueItems.map(item => {
-      const info = buildDownloadInfo(item, server, token);
-      const url = getFullBypassUrl(item, server, token);
-      return { ...info, url };
-    });
     const sanitizedPackageName = packageName.replace(/[^a-z0-9_-]/gi, '_');
+    const platform = navigator.platform.toLowerCase();
+    const isWindows = platform.includes('win');
+    const isMac = platform.includes('mac');
 
-    // Detect OS
-    const isWindows = navigator.platform.toLowerCase().includes('win');
-    const isMac = navigator.platform.toLowerCase().includes('mac');
-
-    let scriptContent, filename, fileType;
-
+    let scriptContent, filename, instructions;
     if (isWindows) {
-      // Windows Batch Script using curl (built-in Windows 10+)
-      scriptContent = `@echo off
-chcp 65001 >nul
-setlocal enabledelayedexpansion
-
-echo ============================================
-echo PulseGrab Download Script for Windows
-echo ============================================
-echo.
-echo Package: ${packageName}
-echo Files: ${downloadInfo.length}
-echo.
-echo Downloads will be saved to current folder
-echo Press Ctrl+C to cancel
-echo.
-pause
-
-echo.
-echo Starting downloads...
-echo.
-
-`;
-
-      downloadInfo.forEach((info, index) => {
-        const url = info.url;
-        const filename = info.filename.replace(/"/g, '\\"');
-        scriptContent += `echo [${index + 1}/${downloadInfo.length}] ${filename}\n`;
-        scriptContent += `curl -L -o "${filename}" "${url}"\n`;
-        scriptContent += `if errorlevel 1 (\n`;
-        scriptContent += `  echo ERROR: Failed to download ${filename}\n`;
-        scriptContent += `) else (\n`;
-        scriptContent += `  echo SUCCESS: ${filename}\n`;
-        scriptContent += `)\n`;
-        scriptContent += `echo.\n\n`;
-      });
-
-      scriptContent += `echo.
-echo ============================================
-echo Download Complete!
-echo ============================================
-echo.
-pause
-`;
-
-      filename = `pulsegrab_${sanitizedPackageName}.bat`;
-      fileType = 'text/plain';
-
-    } else {
-      // Unix Shell Script (Mac/Linux) using wget or curl
-      scriptContent = `#!/bin/bash
-
-echo "============================================"
-echo "PulseGrab Download Script"
-echo "============================================"
-echo ""
-echo "Package: ${packageName}"
-echo "Files: ${downloadInfo.length}"
-echo ""
-echo "Downloads will be saved to current folder"
-echo "Press Ctrl+C to cancel"
-echo ""
-read -p "Press Enter to start downloading..."
-
-echo ""
-echo "Starting downloads..."
-echo ""
-
-# Check if wget is available, otherwise use curl
-if command -v wget &> /dev/null; then
-  DOWNLOADER="wget"
-elif command -v curl &> /dev/null; then
-  DOWNLOADER="curl"
-else
-  echo "ERROR: Neither wget nor curl found. Please install one of them."
-  exit 1
-fi
-
-FAILED=0
-SUCCESS=0
-
-`;
-
-      downloadInfo.forEach((info, index) => {
-        const qurl = shQuote(info.url);
-        const qfile = shQuote(info.filename);
-        const filename = info.filename.replace(/'/g, "'\\''");
-        scriptContent += `echo "[${index + 1}/${downloadInfo.length}] ${filename}"\n`;
-        scriptContent += `if [ "$DOWNLOADER" = "wget" ]; then\n`;
-        scriptContent += `  wget -O ${qfile} ${qurl}\n`;
-        scriptContent += `else\n`;
-        scriptContent += `  curl -L -o ${qfile} ${qurl}\n`;
-        scriptContent += `fi\n\n`;
-        scriptContent += `if [ $? -eq 0 ]; then\n`;
-        scriptContent += `  echo "SUCCESS: ${filename}"\n`;
-        scriptContent += `  SUCCESS=$((SUCCESS + 1))\n`;
-        scriptContent += `else\n`;
-        scriptContent += `  echo "ERROR: Failed to download ${filename}"\n`;
-        scriptContent += `  FAILED=$((FAILED + 1))\n`;
-        scriptContent += `fi\n`;
-        scriptContent += `echo ""\n\n`;
-      });
-
-      scriptContent += `
-echo ""
-echo "============================================"
-echo "Download Complete!"
-echo "============================================"
-echo "Success: $SUCCESS"
-echo "Failed: $FAILED"
-echo ""
-`;
-
-      if (isMac) {
-        filename = `pulsegrab_${sanitizedPackageName}.command`;
-      } else {
-        filename = `pulsegrab_${sanitizedPackageName}.sh`;
-      }
-      fileType = 'text/x-shellscript';
-    }
-
-    // Create downloadable file
-    const blob = new Blob([scriptContent], { type: fileType });
-    saveBlob(blob, filename);
-
-    // Show instructions
-    let instructions;
-    if (isWindows) {
+      // Without this, files land in whatever folder PowerShell happened to start in.
+      scriptContent = 'Set-Location -LiteralPath $PSScriptRoot\n' + OutputFormatters.powershell(uniqueItems, server, token);
+      filename = `pulsegrab_${sanitizedPackageName}.ps1`;
       instructions = `Windows Instructions:
 1. Find the downloaded file: ${filename}
-2. Double-click it to run
+2. Right-click → Run with PowerShell
 3. Files will download to the same folder
 
 Note: If Windows blocks the script, right-click → Properties → Unblock`;
-    } else if (isMac) {
-      instructions = `macOS Instructions:
+    } else {
+      scriptContent = OutputFormatters.wget(uniqueItems, server, token);
+      if (isMac) {
+        // Double-clicked .command files start in the home folder, not next to the file.
+        scriptContent = scriptContent.replace('\n', '\ncd "$(dirname "$0")"\n');
+        filename = `pulsegrab_${sanitizedPackageName}.command`;
+        instructions = `macOS Instructions:
 1. Find the downloaded file: ${filename}
 2. Double-click it to run (Terminal will open)
 3. Files will download to the same folder
 
 Note: If blocked, right-click → Open, or run in Terminal:
   chmod +x "${filename}" && ./"${filename}"`;
-    } else {
-      instructions = `Linux Instructions:
+      } else {
+        filename = `pulsegrab_${sanitizedPackageName}.sh`;
+        instructions = `Linux Instructions:
 1. Open Terminal in the folder with ${filename}
 2. Make it executable: chmod +x "${filename}"
 3. Run it: ./"${filename}"
 4. Files will download to current folder`;
+      }
     }
 
-    showNotification(`wget/curl script downloaded!\n\n${instructions}`, 'success', 8000);
-    logDebug(`[SUCCESS] wget/curl download script generated: ${filename}`);
+    saveBlob(new Blob([scriptContent], { type: 'text/plain' }), filename);
+    showNotification(`Download script saved!\n\n${instructions}`, 'success', 8000);
+    logDebug(`[SUCCESS] download script generated: ${filename}`);
   }
 
 
@@ -9459,12 +9309,8 @@ animation: fadeIn 0.3s ease;
             <div style="background: ${isDarkMode ? 'rgba(6, 182, 212, 0.08)' : '#ecfeff'}; border: 1px solid ${isDarkMode ? 'rgba(6, 182, 212, 0.3)' : '#a5f3fc'}; border-radius: 12px; padding: 16px;">
               <h4 style="color: ${isDarkMode ? '#22d3ee' : '#0e7490'}; margin: 0 0 12px 0; font: 600 14px system-ui;">Destination Setup (one time)</h4>
               <ol style="color: ${isDarkMode ? '#9ca3af' : '#334155'}; font: 13px system-ui; margin: 0 0 14px 0; padding-left: 20px; line-height: 1.7;">
-                <li>On TrueNAS: <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Apps → Discover → Custom App → Install via YAML</strong>, and paste the compose file below.</li>
-                <li>Change the left side of the library volume to your own media dataset, and <code>PUID</code>/<code>PGID</code> to the user Emby runs as (568:568 on TrueNAS).</li>
-                <li>Save the hook script as <code>/config/script/pulsegrab-move.sh</code>, run <code>chmod 700</code> on it, and <em>replace</em> the
-                    <code>on-download-complete=</code> line in <code>/config/aria2.conf</code> with
-                    <code>on-download-complete=/config/script/pulsegrab-move.sh</code>. The image ships that line already pointing at its own
-                    cleanup script — PulseGrab's hook calls it afterwards, so nothing is lost.</li>
+                <li>On TrueNAS: <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Apps → Discover → Custom App → Install via YAML</strong>, and paste the compose file (use the button below).</li>
+                <li>Change the two left-hand paths (your media folder and the config folder) to your own folders, then deploy. The compose file writes the mover script and <code>aria2.conf</code> itself, so there is nothing else to edit.</li>
                 <li>Restart the app, then hit <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Test Connection</strong> above.</li>
               </ol>
               <p style="color: ${isDarkMode ? '#6b7280' : '#64748b'}; font: 12px system-ui; margin: 0 0 12px 0; line-height: 1.6;">
@@ -9895,7 +9741,15 @@ animation: fadeIn 0.3s ease;
 
     panel.querySelector('#copy-remote-compose').addEventListener('click', async () => {
       applyRemoteSettingsFromPanel(panel);
-      await copyToClipboard(remoteComposeYaml());
+      await copyToClipboard(wizardComposeYaml({
+        platform: 'truenas',
+        port: Settings.get('remotePort') || CONFIG.remote.defaultPort,
+        secret: Settings.get('remoteSecret') || 'change-me',
+        maxConnections: Settings.get('remoteMaxConnections') || 1,
+        mediaPath: '/mnt/pool/media',
+        configPath: '/mnt/pool/apps/pulsegrab-aria2/config',
+        uid: '', gid: ''
+      }));
       showNotification('Compose YAML copied — paste it into TrueNAS → Custom App → Install via YAML.', 'success', 5000);
     });
 
@@ -11606,7 +11460,7 @@ animation: fadeIn 0.3s ease;
       lines.push(...items.filter(item => item && item.Id).map(item => {
         const url = getFullBypassUrl(item, server, token);
         const downloadInfo = buildDownloadInfo(item, server, token);
-        return `wget -O ${shQuote(downloadInfo.fullPath)} ${shQuote(url)}`;
+        return `mkdir -p "$(dirname ${shQuote(downloadInfo.fullPath)})" && wget -O ${shQuote(downloadInfo.fullPath)} ${shQuote(url)}`;
       }));
       return lines.join('\n');
     },
