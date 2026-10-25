@@ -12,6 +12,8 @@ OLD=$(sed -n 's|^// @version *||p' releases/PulseGrab.user.js)
 sed -i '' "s|^// @version .*|// @version      $NEW|" releases/PulseGrab.user.js
 sed -i '' "s|version-$OLD-brightgreen|version-$NEW-brightgreen|; s|Current Version: \*\*v$OLD\*\*|Current Version: **v$NEW**|" README.md
 SITE=../site/index.html
-[ -f "$SITE" ] && sed -i '' "s|\"softwareVersion\": \"$OLD\"|\"softwareVersion\": \"$NEW\"|; s|v$OLD|v$NEW|g" "$SITE"
+# Site: only the machine-readable version; its badge and changelog section are edited by hand
+# (a blanket replace would rename the old release's changelog heading too).
+[ -f "$SITE" ] && sed -i '' "s|\"softwareVersion\": \"$OLD\"|\"softwareVersion\": \"$NEW\"|" "$SITE"
 echo "Bumped $OLD -> $NEW. Add a README changelog entry, then:"
 echo "  gh release create v$NEW releases/PulseGrab.user.js --title 'PulseGrab v$NEW' --notes-file NOTES.md"
