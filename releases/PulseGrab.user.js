@@ -308,7 +308,6 @@
         minQuality: null,  // '720p', '1080p', '4K'
         maxFileSize: null, // in GB
         excludeSubtitles: false,
-        includeTypes: ['Movie', 'Episode', 'Video', 'Audio'],
         // NEW v6.55: Exclude extras
         excludeExtras: false
       },
@@ -870,12 +869,6 @@
       if (!filters) return items;
 
       return items.filter(item => {
-        // Type filter
-        if (filters.includeTypes && !filters.includeTypes.includes(item.Type)) {
-          logDebug(`[Filter] Excluding ${item.Name} - type ${item.Type} not in whitelist`);
-          return false;
-        }
-
         // NEW v6.55: Minimum file size filter
         if (filters.minFileSize && item.Size) {
           const minBytes = filters.minFileSize * 1024 * 1024 * 1024;
@@ -11153,8 +11146,7 @@ animation: fadeIn 0.3s ease;
             minFileSize: filterSizeMin,
             maxFileSize: filterSizeMax,
             excludeExtras: filterExcludeExtras,
-            excludeSubtitles: false,
-            includeTypes: ['Movie', 'Episode', 'Video', 'Audio']
+            excludeSubtitles: false
           });
 
           // Update rate limiter
