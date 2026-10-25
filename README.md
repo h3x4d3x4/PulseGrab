@@ -24,12 +24,28 @@
 
 ## Changelog
 
+### v1.4.0
+**Everything that was quietly broken now works, plus Plex search.**
+
+* **Filters actually apply.** Quality, size and "exclude extras" in Settings → Filters & History were saved but never used. They now run on every scan, and the results dialog says how many items they removed. "Skip previously downloaded" works too.
+* **History records real downloads**, not every scan.
+* **Plex search** — search results on Plex can be downloaded, scoped to the active tab, like Emby and Jellyfin.
+* **Big downloads no longer crash the tab** — on Chrome/Edge over HTTPS the Download Manager streams files straight into a folder you pick, sorted into Movies / TV Shows / Music, and resumes after a pause. Other browsers keep the old behaviour and warn before files over 2 GB.
+* **Series inside collections and folders inside folders** are expanded everywhere, and Jellyfin library scans no longer fetch everything twice.
+* **Picks the best version** of items with several (4K and 1080p) — on by default, toggle in General.
+* **Music and photo links fixed** — audio uses the audio stream endpoint, photos and other files the plain download endpoint.
+* **Leaves your media server's own look alone.** Dark mode no longer repaints Emby/Jellyfin pages, follows your system theme by default, and no longer leaks a page observer on every navigation.
+* **Security:** media titles are escaped everywhere they are shown; access tokens are no longer printed to the browser console; Export Setup leaves passwords and API keys out unless you ask; the generated aria2 config no longer allows any web origin.
+* **No more background traffic** — the never-used background prefetch that scanned folders on every page load is gone.
+* Proper in-page dialogs instead of browser pop-ups, Escape closes the top dialog everywhere, screen-reader labels, plainer settings wording, an accurate Wiki, and file names without empty "()" when a film has no year.
+* About 1,200 lines of dead code removed; unit tests for the helpers and the aria2 mover script.
+
 ### v1.3.0
 **Server-to-server transfers and search results.**
 
 * **Send to My Server** — hand the download list to aria2 or My.JDownloader on your NAS; the files never pass through your browser and keep transferring after you close the tab.
 * **Search results are downloadable** — grab every match at once, scoped to the active tab (Movies, Shows, Episodes or All). Series are expanded by parent, so a show search collects every episode.
-* Fixes: series expansion on Emby returned seasons instead of episodes; Jellyfin search views are detected; Plex search says "not supported yet" instead of failing oddly.
+* Fixes: series expansion on Emby returned seasons instead of episodes; Jellyfin search views are detected; Plex search says "not supported yet" instead of failing oddly (Plex search is supported from v1.4.0).
 
 ### v1.2.0
 **Guided setup, and a destination picker that knows your libraries.**
