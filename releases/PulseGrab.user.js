@@ -266,7 +266,7 @@
       autoConfirm: false,
       showProgress: true,
       theme: 'auto',
-      darkMode: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches,
+      darkMode: 'auto', // 'auto' follows the OS live; true/false force it
       jdownloaderEnabled: false,
       jdownloaderHost: '',   // blank = local (127.0.0.1 / localhost)
       jdownloaderPort: 9666,
@@ -548,7 +548,7 @@
       const existing = document.getElementById('pulsegrab-update-banner');
       if (existing) existing.remove();
 
-      const isDarkMode = Settings.get('darkMode');
+      const isDarkMode = isDarkTheme();
       const banner = document.createElement('div');
       banner.id = 'pulsegrab-update-banner';
       banner.style.cssText = `
@@ -3035,7 +3035,7 @@
   // Every step that can be checked *is* checked, live, so nobody is left
   // wondering whether it worked.
   function showSetupWizard() {
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
     const theme = getTheme();
 
     const existingSecret = Settings.get('remoteSecret') || '';
@@ -3752,7 +3752,7 @@
   // absolute destination; aria2 works relative to its own mounted root.
   function browseForFolder(startRelative = '', { absolute = false } = {}) {
     return new Promise(resolve => {
-      const isDarkMode = Settings.get('darkMode');
+      const isDarkMode = isDarkTheme();
       const theme = getTheme();
       const dest = resolveDestServer();
       const mediaRoot = (Settings.get('destMediaRoot') || destMediaRoot(cachedDestLibraries()) || '').replace(/\/+$/, '');
@@ -4719,7 +4719,7 @@ exit 0
   // Resolves to the chosen items, or null if cancelled.
   function showTransferSelection(items) {
     return new Promise(resolve => {
-      const isDarkMode = Settings.get('darkMode');
+      const isDarkMode = isDarkTheme();
       const theme = getTheme();
       const groups = groupItemsForTransfer(items);
 
@@ -4942,7 +4942,7 @@ exit 0
   // Resolves to a { contentKind: folderName } map, or null if cancelled.
   function askRemoteDestination(items, server, token) {
     return new Promise(resolve => {
-      const isDarkMode = Settings.get('darkMode');
+      const isDarkMode = isDarkTheme();
       const theme = getTheme();
 
       // Only ask about the content types actually present in this batch.
@@ -5295,7 +5295,7 @@ exit 0
       return;
     }
 
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
     const theme = getTheme();
 
     const tracked = new Map();
@@ -5657,7 +5657,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
   // ---------- Post-Scan Results Dialog ----------
   function showResultsDialog(items, server, token, operationType, filteredCount = 0) {
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
 
     const overlay = document.createElement('div');
     overlay.className = 'pg-overlay pg-overlay-nav';
@@ -5690,7 +5690,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     `;
 
     // Apply dark mode if enabled
-    if (Settings.get('darkMode')) {
+    if (isDarkTheme()) {
       dialog.setAttribute('data-dark-mode', 'true');
     }
 
@@ -6096,7 +6096,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     `;
 
     // Apply dark mode if enabled
-    if (Settings.get('darkMode')) {
+    if (isDarkTheme()) {
       dialog.setAttribute('data-dark-mode', 'true');
     }
 
@@ -6302,7 +6302,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     `;
 
     // Apply dark mode immediately if enabled
-    if (Settings.get('darkMode')) {
+    if (isDarkTheme()) {
       manager.setAttribute('data-dark-mode', 'true');
       logDebug('[DownloadManager] Applied dark mode attribute on creation');
     }
@@ -6413,7 +6413,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       GM_setValue('downloadManagerState', downloadManagerState);
     }
 
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
 
     manager.innerHTML = `
       <div id="dm-inner" style="display:flex;flex-direction:column;flex:1;min-height:0;box-sizing:border-box;overflow:hidden;">
@@ -6721,7 +6721,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     }
 
     function renderStatsView() {
-      const isDarkMode = Settings.get('darkMode');
+      const isDarkMode = isDarkTheme();
 
       const stats = {
         total: downloadQueue.length,
@@ -6956,7 +6956,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         paused: '#f59e0b'
       };
 
-      const isDarkMode = Settings.get('darkMode');
+      const isDarkMode = isDarkTheme();
 
       const bgColors = isDarkMode ? {
         completed: 'linear-gradient(135deg, #1a2e1a 0%, #1e3a1e 100%)',
@@ -8082,7 +8082,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     }
 
     // Status filter tab bar — inject below the top toolbar
-    const isDarkModeForTabs = Settings.get('darkMode');
+    const isDarkModeForTabs = isDarkTheme();
     const filterTabBar = document.createElement('div');
     filterTabBar.id = 'dm-status-filter-bar';
     filterTabBar.style.cssText = `
@@ -8496,7 +8496,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       existingModal.remove();
     }
 
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
 
     const overlay = document.createElement('div');
     overlay.className = 'pg-overlay';
@@ -8824,7 +8824,7 @@ animation: fadeIn 0.3s ease;
 
     const panel = document.createElement('div');
     panel.id = 'pulse-grab-settings';
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
 
     panel.style.cssText = `
         background: ${isDarkMode ? '#1c1c1c' : 'white'};
@@ -9147,13 +9147,14 @@ animation: fadeIn 0.3s ease;
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Dark Mode</div>
-                  <div class="setting-desc">Apply high-contrast dark backgrounds across all menus.</div>
+                  <div class="setting-desc">Auto follows your system's light or dark setting.</div>
                 </div>
-                <div class="setting-control">
-                  <label class="custom-toggle">
-                    <input type="checkbox" id="dark-mode" ${currentSettings.darkMode ? 'checked' : ''}>
-                    <span class="toggle-slider"></span>
-                  </label>
+                <div class="setting-control" style="max-width: 200px;">
+                  <select id="dark-mode" class="modern-input">
+                    <option value="auto" ${currentSettings.darkMode !== true && currentSettings.darkMode !== false ? 'selected' : ''}>Auto (match system)</option>
+                    <option value="light" ${currentSettings.darkMode === false ? 'selected' : ''}>Light</option>
+                    <option value="dark" ${currentSettings.darkMode === true ? 'selected' : ''}>Dark</option>
+                  </select>
                 </div>
               </div>
               
@@ -9974,7 +9975,7 @@ animation: fadeIn 0.3s ease;
         // compared the panel background to 'rgb(42,42,42)', but the panel is
         // #1c1c1c (rgb(28,28,28)), so dark mode never matched and deselected
         // presets were reset to white-on-dark (invisible).
-        const presetDark = Settings.get('darkMode');
+        const presetDark = isDarkTheme();
         qualityPresets.forEach(b => {
           b.classList.remove('active');
           b.style.background = presetDark ? '#2a2a2a' : 'white';
@@ -10361,7 +10362,8 @@ animation: fadeIn 0.3s ease;
           const buttonPosition = settingsPanel.querySelector('#button-position').value;
           const outputFormat = settingsPanel.querySelector('#output-format').value;
           const theme = settingsPanel.querySelector('#theme').value;
-          const darkMode = settingsPanel.querySelector('#dark-mode').checked;
+          const darkModeChoice = settingsPanel.querySelector('#dark-mode').value;
+          const darkMode = darkModeChoice === 'dark' ? true : darkModeChoice === 'light' ? false : 'auto';
           const showProgress = settingsPanel.querySelector('#show-progress').checked;
           const autoConfirm = settingsPanel.querySelector('#auto-confirm').checked;
           const jdownloaderEnabled = settingsPanel.querySelector('#jdownloader-enabled').checked;
@@ -10578,7 +10580,7 @@ animation: fadeIn 0.3s ease;
   }
 
   function showAboutDialog() {
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
 
     const overlay = document.createElement('div');
     overlay.className = 'pg-overlay';
@@ -10761,7 +10763,7 @@ animation: fadeIn 0.3s ease;
   }
 
   function showWikiDialog() {
-    const isDarkMode = Settings.get('darkMode');
+    const isDarkMode = isDarkTheme();
 
     const overlay = document.createElement('div');
     overlay.className = 'pg-overlay';
@@ -11031,7 +11033,7 @@ animation: fadeIn 0.3s ease;
                         `;
 
     // Apply dark mode if enabled
-    if (Settings.get('darkMode')) {
+    if (isDarkTheme()) {
       dialog.setAttribute('data-dark-mode', 'true');
     }
 
@@ -11230,7 +11232,7 @@ animation: fadeIn 0.3s ease;
                         `;
 
     // Apply dark mode if enabled
-    if (Settings.get('darkMode')) {
+    if (isDarkTheme()) {
       dialog.setAttribute('data-dark-mode', 'true');
     }
 
@@ -11414,7 +11416,7 @@ animation: fadeIn 0.3s ease;
                         animation: fadeIn 0.3s ease;
                         `;
 
-    const isDark = Settings.get('darkMode');
+    const isDark = isDarkTheme();
     const dialog = document.createElement('div');
     dialog.style.cssText = `
                         background: ${isDark ? '#1c1c1c' : 'white'};
@@ -14313,9 +14315,16 @@ animation: fadeIn 0.3s ease;
       abortController = null;
     }
   } // Closes handleButtonClick
+  // 'auto' (or anything unset) follows the OS; stored true/false from older versions still work.
+  function isDarkTheme() {
+    const v = Settings.get('darkMode');
+    if (v === true || v === false) return v;
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+
   function applyDarkMode() {
-    const darkMode = Settings.get('darkMode');
-    logDebug('[PulseGrab] Dark mode setting:', darkMode);
+    const darkMode = isDarkTheme();
+    logDebug('[PulseGrab] Dark mode setting:', Settings.get('darkMode'), '->', darkMode);
 
     if (darkMode) {
       // Add dark mode class to body
@@ -14641,6 +14650,10 @@ animation: fadeIn 0.3s ease;
       _initAttempts = 0;
 
       applyDarkMode();
+      // Follow OS changes live while the setting is 'auto'.
+      window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
+        if (typeof Settings.get('darkMode') !== 'boolean') applyDarkMode();
+      });
       createButton();
       setupKeyboardShortcuts();
 
