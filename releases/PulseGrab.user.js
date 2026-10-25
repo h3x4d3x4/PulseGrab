@@ -11812,102 +11812,10 @@ animation: fadeIn 0.3s ease;
         }
 
         try {
-          if (item.Type === 'Series') {
-            // Expand TV series to episodes
-            logDebug(`[Library] Expanding series: ${item.Name}`);
-
-            // Fetch seasons - manual fetch because fetchSeasonsREST doesn't support options yet
-            const seasons = await fetchSeasonsREST(server, token, item.Id);
-
-            for (const season of seasons) {
-              // Rate limiting delay for season
-              if (requestDelay > 0) {
-                await new Promise(resolve => setTimeout(resolve, requestDelay));
-              }
-
-              const episodeData = await fetchEpisodesREST(server, token, item.Id, season.Id);
-              let episodes = episodeData?.Items || [];
-
-              // Try fallback if needed
-              if (!episodes.length && (episodeData?.apiNotAvailable || episodeData?.apiError)) {
-                const fallbackData = await fetchFolderItems(server, token, season.Id, 0, CONFIG.batchSize, { delay: requestDelay, skipWatched });
-                episodes = fallbackData?.Items?.filter(e => e.Type === 'Episode') || [];
-              }
-
-              // Filter episodes by watched status if needed (if not already done by fetchFolderItems)
-              if (skipWatched) {
-                episodes = episodes.filter(e => !e.UserData?.Played);
-              }
-
-              allItems.push(...episodes);
-              logDebug(`[Library] Added ${episodes.length} episodes from ${season.Name}`);
-            }
-          } else if (item.Type === 'MusicArtist') {
-            // Expand music artist → albums → tracks
-            logDebug(`[Library] Expanding artist: ${item.Name}`);
-
-            if (SERVER_TYPE === 'plex') {
-              const albumUrl = `${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`;
-              const albumData = await fetchWithRetry(albumUrl);
-              const albums = albumData.MediaContainer?.Metadata || [];
-
-              for (const album of albums) {
-                if (abortController?.signal.aborted) break;
-                if (requestDelay > 0) await new Promise(r => setTimeout(r, requestDelay));
-
-                const trackUrl = `${server}/library/metadata/${album.ratingKey}/children?X-Plex-Token=${token}`;
-                const trackData = await fetchWithRetry(trackUrl);
-                let tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
-                if (skipWatched) tracks = tracks.filter(t => !t.UserData?.Played);
-                allItems.push(...tracks);
-                logDebug(`[Library] Added ${tracks.length} tracks from ${album.title}`);
-              }
-            } else {
-              // Emby/Jellyfin: fetch all audio items recursively under artist
-              const prefix = apiPrefix();
-              const params = new URLSearchParams({
-                ParentId: item.Id, Recursive: 'true', IncludeItemTypes: 'Audio',
-                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
-              });
-              if (skipWatched) params.append('IsPlayed', 'false');
-              const url = `${server}${prefix}/Items?${params.toString()}`;
-              const data = await fetchWithRetry(url);
-              const tracks = data?.Items || [];
-              allItems.push(...tracks);
-              logDebug(`[Library] Added ${tracks.length} tracks from artist ${item.Name}`);
-            }
-          } else if (item.Type === 'MusicAlbum') {
-            // Expand music album → tracks
-            logDebug(`[Library] Expanding album: ${item.Name}`);
-
-            if (SERVER_TYPE === 'plex') {
-              const trackUrl = `${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`;
-              const trackData = await fetchWithRetry(trackUrl);
-              let tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
-              if (skipWatched) tracks = tracks.filter(t => !t.UserData?.Played);
-              allItems.push(...tracks);
-              logDebug(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
-            } else {
-              const prefix = apiPrefix();
-              const params = new URLSearchParams({
-                ParentId: item.Id, IncludeItemTypes: 'Audio',
-                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
-              });
-              if (skipWatched) params.append('IsPlayed', 'false');
-              const url = `${server}${prefix}/Items?${params.toString()}`;
-              const data = await fetchWithRetry(url);
-              const tracks = data?.Items || [];
-              allItems.push(...tracks);
-              logDebug(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
-            }
-          } else if (item.Type === 'BoxSet' || item.Type === 'Collection') {
-            // Expand collections
-            logDebug(`[Library] Expanding collection: ${item.Name}`);
-            const collectionItems = await processCollection(server, token, item.Id, { delay: requestDelay, skipWatched });
-            allItems.push(...collectionItems);
-          } else if (['Movie', 'Video', 'Audio', 'Episode'].includes(item.Type)) {
-            // Direct downloadable item
+          if (isDownloadableItem(item)) {
             allItems.push(item);
+          } else if (isContainerItem(item)) {
+            allItems.push(...await expandContainer(server, token, item, { delay: requestDelay, skipWatched }));
           }
 
           // Small extra delay if no specific request delay was set
@@ -13205,6 +13113,149 @@ animation: fadeIn 0.3s ease;
 
 
 
+  // ---------- Container expansion ----------
+  // One place that knows how to turn a show, season, album, artist, collection
+  // or folder into the files inside it. Every processor (folder, collection,
+  // library, search) goes through here, so they can't drift apart again, and
+  // nesting (a series inside a collection, folders inside folders) just works.
+  const VIDEO_CONTAINERS = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v', 'ts', 'm2ts', 'webm', 'mpg', 'mpeg'];
+  const AUDIO_CONTAINERS = ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a', 'opus', 'wma'];
+  const CONTAINER_TYPES = ['Series', 'Season', 'BoxSet', 'Collection', 'Playlist', 'MusicArtist', 'MusicAlbum',
+    'Folder', 'CollectionFolder', 'UserView'];
+  const MAX_EXPAND_DEPTH = 8;
+
+  function isDownloadableItem(item) {
+    if (!item || item.IsFolder) return false;
+    if (['Movie', 'Episode', 'Audio', 'Video', 'MusicVideo', 'Photo'].includes(item.Type)) return true;
+    if (item.MediaType === 'Video' || item.MediaType === 'Audio') return true;
+    const container = String(item.Container || '').toLowerCase();
+    return VIDEO_CONTAINERS.includes(container) || AUDIO_CONTAINERS.includes(container);
+  }
+
+  function isContainerItem(item) {
+    return Boolean(item) && !isDownloadableItem(item)
+      && (CONTAINER_TYPES.includes(item.Type) || item.IsFolder === true);
+  }
+
+  // Episodes of one season. The Shows endpoint gives the richest metadata; the
+  // plain Items listing is the fallback for servers where it 404s or comes back
+  // empty while claiming records exist.
+  async function fetchSeasonEpisodes(server, token, seriesId, seasonId, opts = {}) {
+    if (seriesId) {
+      const data = await fetchEpisodesREST(server, token, seriesId, seasonId);
+      const episodes = data?.Items || [];
+      const tryFallback = !episodes.length
+        && (data?.TotalRecordCount > 0 || data?.apiNotAvailable || data?.apiError);
+      if (!tryFallback) return episodes;
+    }
+    const fallback = await fetchFolderItems(server, token, seasonId, 0, CONFIG.maxFolderItems, opts);
+    return (fallback?.Items || []).filter(item => item.Type === 'Episode');
+  }
+
+  async function fetchSeriesEpisodes(server, token, seriesId, opts = {}) {
+    const seasons = await fetchSeasonsREST(server, token, seriesId);
+    seasons.sort((a, b) => (a.IndexNumber ?? 9999) - (b.IndexNumber ?? 9999));
+
+    const tasks = seasons.map(season => async () => {
+      try {
+        return await fetchSeasonEpisodes(server, token, seriesId, season.Id, opts);
+      } catch (error) {
+        console.warn(`[PulseGrab] Season ${season.IndexNumber ?? season.Name} failed:`, error.message);
+        return [];
+      }
+    });
+    const concurrency = Settings.get('enableParallelFetching')
+      ? (Settings.get('parallelSeasonFetches') || CONFIG.parallelSeasonFetches) : 1;
+    return (await parallelFetch(tasks, concurrency)).flat();
+  }
+
+  // Tracks of an artist or album. Artists aren't parents of their tracks in the
+  // Emby/Jellyfin tree, so they are matched with ArtistIds; ParentId is kept as
+  // a fallback for servers that do nest them.
+  async function fetchTracks(server, token, item, opts = {}) {
+    const query = extra => {
+      const params = new URLSearchParams({
+        Recursive: 'true', IncludeItemTypes: 'Audio', SortBy: 'ParentIndexNumber,IndexNumber,SortName',
+        Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token, ...extra
+      });
+      if (opts.skipWatched) params.append('IsPlayed', 'false');
+      return fetchWithRetry(`${server}${apiPrefix()}/Items?${params.toString()}`);
+    };
+    if (item.Type === 'MusicArtist') {
+      const byArtist = await query({ ArtistIds: item.Id });
+      if (byArtist?.Items?.length) return byArtist.Items;
+    }
+    return (await query({ ParentId: item.Id }))?.Items || [];
+  }
+
+  async function expandContainer(server, token, item, opts = {}, depth = 0) {
+    if (abortController?.signal.aborted) throw new Error('Operation cancelled');
+    if (!item || !item.Id || depth > MAX_EXPAND_DEPTH) return [];
+
+    const unwatched = list => opts.skipWatched ? list.filter(entry => !entry.UserData?.Played) : list;
+    let children;
+
+    if (SERVER_TYPE === 'plex') {
+      if (item.Type === 'Series' || item.Type === 'MusicArtist') {
+        const data = await fetchWithRetry(`${server}/library/metadata/${item.Id}/allLeaves?X-Plex-Token=${token}`);
+        return unwatched((data.MediaContainer?.Metadata || []).map(normalizeItemPlex).filter(isDownloadableItem));
+      }
+      if (item.Type === 'Collection') {
+        children = (await fetchCollectionItems(server, token, item.Id, 0, CONFIG.batchSize, opts)).Items || [];
+      } else {
+        const data = await fetchWithRetry(`${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`);
+        children = (data.MediaContainer?.Metadata || []).map(normalizeItemPlex);
+      }
+    } else if (item.Type === 'Series') {
+      return unwatched(await fetchSeriesEpisodes(server, token, item.Id, opts));
+    } else if (item.Type === 'Season') {
+      return unwatched(await fetchSeasonEpisodes(server, token, item.SeriesId, item.Id, opts));
+    } else if (item.Type === 'MusicArtist' || item.Type === 'MusicAlbum') {
+      return unwatched(await fetchTracks(server, token, item, opts));
+    } else if (['BoxSet', 'Collection', 'Playlist'].includes(item.Type)) {
+      try {
+        children = await fetchAllCollectionItems(server, token, item.Id, null, opts);
+      } catch (error) {
+        if (error.message === 'Operation cancelled') throw error;
+        children = await fetchAllFolderItems(server, token, item.Id, null, { ...opts, silent: true });
+      }
+    } else {
+      children = await fetchAllFolderItems(server, token, item.Id, null, { ...opts, silent: true });
+    }
+
+    const files = unwatched(children.filter(isDownloadableItem));
+    for (const child of children.filter(isContainerItem)) {
+      if (opts.delay > 0) await new Promise(resolve => setTimeout(resolve, opts.delay));
+      try {
+        files.push(...await expandContainer(server, token, child, opts, depth + 1));
+      } catch (error) {
+        if (error.message === 'Operation cancelled') throw error;
+        console.warn(`[PulseGrab] Could not expand ${child.Type} "${child.Name}":`, error.message);
+      }
+    }
+    return files;
+  }
+
+  // Expand a list of containers with progress, collecting failures instead of
+  // aborting the whole scan on one bad show.
+  async function expandAll(server, token, containers, opts = {}) {
+    const files = [];
+    for (let i = 0; i < containers.length; i++) {
+      if (abortController?.signal.aborted) throw new Error('Operation cancelled');
+      const container = containers[i];
+      updateProgress(i, containers.length, `Expanding ${container.Name || container.Type} (${i + 1}/${containers.length})...`);
+      try {
+        files.push(...await expandContainer(server, token, container, opts));
+      } catch (error) {
+        if (error.message === 'Operation cancelled') throw error;
+        const errorMsg = `Failed to expand ${container.Type} ${container.Name}: ${error.message}`;
+        console.warn(errorMsg);
+        updateProgress(i, containers.length, `Expanding ${container.Name}...`, errorMsg);
+      }
+    }
+    return files;
+  }
+
   // ---------- Processing Functions ----------
   async function processCollection(server, token, collectionId, options = {}) {
     currentOperation = 'collection';
@@ -13283,60 +13334,13 @@ animation: fadeIn 0.3s ease;
 
       logDebug(`[Debug] Raw items from collection (first 3):`, items.slice(0, 3));
 
-      let downloadableItems = [];
-      const foundSeasons = [];
-
-      for (const item of items) {
-        if (['Movie', 'Episode', 'Audio', 'Video'].includes(item.Type) && !item.IsFolder) {
-          downloadableItems.push(item);
-        } else if (item.Type === 'Season') {
-          foundSeasons.push(item);
-          logDebug(`[Debug] Found season: ${item.Name} (ID: ${item.Id})`);
-        } else if (item.Type === 'Series') {
-          logDebug(`[Debug] Found series in collection: ${item.Name}, skipping (not yet supported)`);
-        }
-      }
-
-      logDebug(`[Debug] Filtered to ${downloadableItems.length} downloadable items and ${foundSeasons.length} seasons`);
-
-      if (!downloadableItems.length && foundSeasons.length > 0) {
-        logDebug(`[Debug] Found only seasons - this appears to be a TV show, not a collection. Expanding seasons to episodes...`);
-
-        for (const season of foundSeasons) {
-          try {
-            logDebug(`[Debug] Expanding season: ${season.Name} (ID: ${season.Id})`);
-            updateProgress(foundSeasons.indexOf(season), foundSeasons.length, `Expanding ${season.Name}...`);
-
-            const episodeData = await fetchFolderItems(server, token, season.Id, 0, CONFIG.batchSize, options);
-            const episodes = episodeData?.Items?.filter(item => item.Type === 'Episode') || [];
-
-            logDebug(`[Debug] Season ${season.Name}: Found ${episodes.length} episodes`);
-
-            if (episodes.length > 0) {
-              downloadableItems.push(...episodes);
-            }
-
-            // Use options.delay if present, otherwise default seasonDelayMs
-            const delay = (options.delay && options.delay > 0) ? options.delay : CONFIG.seasonDelayMs;
-            await new Promise(resolve => setTimeout(resolve, delay));
-
-          } catch (error) {
-            const errorMsg = `Failed to expand season ${season.Name}: ${error.message}`;
-            console.warn(errorMsg);
-            updateProgress(foundSeasons.indexOf(season), foundSeasons.length, `Expanding ${season.Name}...`, errorMsg);
-          }
-        }
-
-        logDebug(`[Debug] After season expansion: ${downloadableItems.length} total episodes`);
-      }
+      let downloadableItems = items.filter(isDownloadableItem);
+      const containers = items.filter(isContainerItem);
+      downloadableItems.push(...await expandAll(server, token, containers, options));
 
       if (!downloadableItems.length) {
         const itemTypes = [...new Set(items.map(i => i.Type))].join(', ');
-        if (foundSeasons.length > 0) {
-          throw new Error(`Found ${foundSeasons.length} seasons but no episodes could be extracted.\n\nThis might be a permissions issue or the episodes are organized differently.\n\nTry navigating to individual season pages instead.`);
-        } else {
-          throw new Error(`No downloadable media files found in this collection.\n\nFound item types: ${itemTypes}\n\nNote: Series in collections are not yet supported - please navigate to individual seasons.`);
-        }
+        throw new Error(`No downloadable media files found in this collection.\n\nFound item types: ${itemTypes}`);
       }
 
       // Apply deduplication
@@ -13347,7 +13351,7 @@ animation: fadeIn 0.3s ease;
         return new Promise((resolve, reject) => {
           const details = [
             `${downloadableItems.length} total items to download`,
-            foundSeasons.length > 0 ? `Expanded from ${foundSeasons.length} seasons` : `Direct collection items`,
+            containers.length > 0 ? `Expanded from ${containers.length} show(s), season(s) or folder(s)` : `Direct collection items`,
             `Output format: ${CONFIG.outputFormats[Settings.get('outputFormat')]}`
           ];
 
@@ -13444,39 +13448,14 @@ animation: fadeIn 0.3s ease;
 
     logDebug(`[Debug] Search returned ${results.length} items, types:`, [...new Set(results.map(i => i.Type))]);
 
-    const isDownloadable = (item) => {
-      if (!item || item.IsFolder) return false;
-      if (['Movie', 'Episode', 'Audio', 'Video', 'MusicVideo'].includes(item.Type)) return true;
-      return item.MediaType === 'Video' || item.MediaType === 'Audio';
-    };
-
-    let downloadableItems = results.filter(isDownloadable);
+    let downloadableItems = results.filter(isDownloadableItem);
 
     // Anything that is a container rather than a file gets walked.
-    const containers = results.filter(i =>
-      ['Series', 'Season', 'BoxSet', 'Collection', 'MusicAlbum'].includes(i.Type) || i.IsFolder
-    );
-
+    const containers = results.filter(isContainerItem);
     if (containers.length) {
       showNotification(`Expanding ${containers.length} show(s)/collection(s)...`, 'info', 3000);
     }
-
-    for (let i = 0; i < containers.length; i++) {
-      if (abortController?.signal.aborted) throw new Error('Operation cancelled');
-
-      const container = containers[i];
-      updateProgress(i, containers.length, `Expanding ${container.Type}: ${container.Name}`);
-
-      try {
-        // recursive:true so an Emby Series returns episodes, not just seasons.
-        const children = await fetchAllFolderItems(server, token, container.Id, null, { recursive: true });
-        const files = (children || []).filter(isDownloadable);
-        downloadableItems.push(...files);
-        logDebug(`[Debug] ${container.Type} "${container.Name}" -> ${files.length} files`);
-      } catch (e) {
-        console.warn(`[PulseGrab] Could not expand ${container.Type} "${container.Name}":`, e.message);
-      }
-    }
+    downloadableItems.push(...await expandAll(server, token, containers));
 
     downloadableItems = deduplicateItems(downloadableItems);
 
@@ -13534,421 +13513,12 @@ animation: fadeIn 0.3s ease;
       logDebug(`[Debug] Raw folder items (first 5):`, items.slice(0, 5));
       logDebug(`[Debug] All item types found:`, [...new Set(items.map(i => i.Type))]);
 
-      let downloadableItems = items.filter(item => {
-        const isStandardDownloadable = ['Movie', 'Episode', 'Audio', 'Video'].includes(item.Type) && !item.IsFolder;
-        const isVideoFile = item.MediaType === 'Video' && !item.IsFolder;
-        const isAudioFile = item.MediaType === 'Audio' && !item.IsFolder;
-        const hasVideoContainer = item.Container && ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v'].includes(item.Container.toLowerCase()) && !item.IsFolder;
-        const hasAudioContainer = item.Container && ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a'].includes(item.Container.toLowerCase()) && !item.IsFolder;
-
-        return isStandardDownloadable || isVideoFile || isAudioFile || hasVideoContainer || hasAudioContainer;
-      });
-
-      const seriesItems = items.filter(item => item.Type === 'Series');
-      const boxSetItems = items.filter(item => item.Type === 'BoxSet' || item.Type === 'Collection');
-
-      logDebug(`[Debug] Found ${downloadableItems.length} direct downloadable items, ${seriesItems.length} TV series, and ${boxSetItems.length} collections/boxsets`);
-
-      // Process Collections/BoxSets
-      if (boxSetItems.length > 0) {
-        updateProgress(0, boxSetItems.length, "Expanding Collections...");
-        showNotification(`Found ${boxSetItems.length} collections, expanding to downloadable items...`, 'info', 3000);
-
-        let totalItemsFromCollections = 0;
-        let successfulCollections = 0;
-
-        for (let i = 0; i < boxSetItems.length; i++) {
-          // Check if operation was cancelled
-          if (abortController.signal.aborted) {
-            logDebug('[Debug] Collection expansion cancelled by user');
-            throw new Error('Operation cancelled');
-          }
-
-          const collection = boxSetItems[i];
-          try {
-            const progressText = `Collection ${i + 1}/${boxSetItems.length}: ${collection.Name}`;
-            updateProgress(i, boxSetItems.length, progressText);
-            showNotification(progressText, 'info', 2000);
-            logDebug(`[Debug] Expanding collection ${i + 1}/${boxSetItems.length}: ${collection.Name} (ID: ${collection.Id})`);
-
-            // Try collection API first
-            let collectionItems = [];
-            try {
-              const collectionData = await fetchAllCollectionItems(server, token, collection.Id);
-              collectionItems = collectionData || [];
-              logDebug(`[Debug] Collection ${collection.Name}: Collection API returned ${collectionItems.length} items`);
-            } catch (collectionError) {
-              console.warn(`[Debug] Collection API failed for ${collection.Name}, trying folder API`);
-              // Fallback to folder API
-              try {
-                const folderData = await fetchAllFolderItems(server, token, collection.Id);
-                collectionItems = folderData || [];
-                logDebug(`[Debug] Collection ${collection.Name}: Folder API returned ${collectionItems.length} items`);
-              } catch (folderError) {
-                console.warn(`[Debug] Both APIs failed for collection ${collection.Name}:`, folderError);
-              }
-            }
-
-            if (collectionItems.length > 0) {
-              // Filter for downloadable items within this collection
-              const collectionDownloadables = collectionItems.filter(item => {
-                const isStandardDownloadable = ['Movie', 'Episode', 'Audio', 'Video'].includes(item.Type) && !item.IsFolder;
-                const isVideoFile = item.MediaType === 'Video' && !item.IsFolder;
-                const isAudioFile = item.MediaType === 'Audio' && !item.IsFolder;
-                const hasVideoContainer = item.Container && ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v'].includes(item.Container.toLowerCase()) && !item.IsFolder;
-                const hasAudioContainer = item.Container && ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a'].includes(item.Container.toLowerCase()) && !item.IsFolder;
-                return isStandardDownloadable || isVideoFile || isAudioFile || hasVideoContainer || hasAudioContainer;
-              });
-
-              // Check for seasons within collections (TV show collections)
-              const seasonsInCollection = collectionItems.filter(item => item.Type === 'Season');
-
-              if (seasonsInCollection.length > 0) {
-                logDebug(`[Debug] Collection ${collection.Name}: Found ${seasonsInCollection.length} seasons, expanding to episodes`);
-
-                for (const season of seasonsInCollection) {
-                  try {
-                    // Get the series ID from the season for proper episode fetching
-                    const seasonData = await getItemInfo(server, token, season.Id);
-                    const seriesId = seasonData.SeriesId || seasonData.ParentId;
-
-                    if (seriesId) {
-                      const episodeData = await fetchEpisodesREST(server, token, seriesId, season.Id);
-                      const episodes = episodeData?.Items || [];
-
-                      if (!episodes.length && episodeData?.TotalRecordCount > 0) {
-                        // Fallback to folder API for episodes
-                        const altEpisodeData = await fetchFolderItems(server, token, season.Id);
-                        const altEpisodes = altEpisodeData?.Items?.filter(item => item.Type === 'Episode') || [];
-                        collectionDownloadables.push(...altEpisodes);
-                        logDebug(`[Debug] Collection ${collection.Name}, Season ${season.Name}: ${altEpisodes.length} episodes (fallback)`);
-                      } else {
-                        collectionDownloadables.push(...episodes);
-                        logDebug(`[Debug] Collection ${collection.Name}, Season ${season.Name}: ${episodes.length} episodes`);
-                      }
-                    }
-
-                    await new Promise(resolve => setTimeout(resolve, 100));
-
-                  } catch (seasonError) {
-                    console.warn(`Failed to expand season ${season.Name} in collection ${collection.Name}:`, seasonError);
-                  }
-                }
-              }
-
-              if (collectionDownloadables.length > 0) {
-                downloadableItems.push(...collectionDownloadables);
-                totalItemsFromCollections += collectionDownloadables.length;
-                successfulCollections++;
-                logDebug(`[Debug] Collection ${collection.Name}: Added ${collectionDownloadables.length} items (running total: ${totalItemsFromCollections})`);
-              } else {
-                logDebug(`[Debug] Collection ${collection.Name}: No downloadable items found`);
-              }
-            }
-
-            if (i < boxSetItems.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, CONFIG.seasonDelayMs));
-            }
-
-          } catch (collectionError) {
-            const errorMsg = `Failed to expand collection ${collection.Name}: ${collectionError.message}`;
-            console.error(errorMsg);
-            updateProgress(i, boxSetItems.length, `Expanding ${collection.Name}...`, errorMsg);
-          }
-        }
-
-        logDebug(`[Debug] Collection expansion complete: ${totalItemsFromCollections} items from ${successfulCollections}/${boxSetItems.length} collections`);
-
-        if (totalItemsFromCollections > 0) {
-          showNotification(`Expanded ${successfulCollections} collections into ${totalItemsFromCollections} downloadable items`, 'info', 3000);
-        }
+      let downloadableItems = items.filter(isDownloadableItem);
+      const containers = items.filter(isContainerItem);
+      if (containers.length) {
+        showNotification(`Expanding ${containers.length} show(s), album(s), collection(s) or folder(s)...`, 'info', 3000);
       }
-
-      // Process TV Series (existing logic)
-      if (seriesItems.length > 0) {
-        updateProgress(0, seriesItems.length, "Expanding TV Shows...");
-        showNotification(`Found ${seriesItems.length} TV series, expanding to episodes...`, 'info', 3000);
-
-        let totalEpisodesFromSeries = 0;
-        let successfulSeries = 0;
-
-        for (let i = 0; i < seriesItems.length; i++) {
-          // Check if operation was cancelled
-          if (abortController.signal.aborted) {
-            logDebug('[Debug] TV series expansion cancelled by user');
-            throw new Error('Operation cancelled');
-          }
-
-          const series = seriesItems[i];
-          try {
-            updateProgress(i, seriesItems.length, `Expanding ${series.Name}...`);
-            logDebug(`[Debug] Expanding TV series: ${series.Name} (ID: ${series.Id})`);
-
-            const seasons = await fetchSeasonsREST(server, token, series.Id);
-            seasons.sort((a, b) => (a.IndexNumber ?? 9999) - (b.IndexNumber ?? 9999));
-
-            if (!seasons.length) {
-              console.warn(`[Debug] No seasons found for series: ${series.Name}`);
-              continue;
-            }
-
-            logDebug(`[Debug] Series ${series.Name}: Found ${seasons.length} seasons`);
-
-            // Fetch episodes in parallel if enabled
-            let seriesEpisodes = [];
-            if (Settings.get('enableParallelFetching') && seasons.length > 1) {
-              const concurrency = Settings.get('parallelSeasonFetches') || CONFIG.parallelSeasonFetches;
-              logDebug(`[Parallel] Fetching ${seasons.length} seasons with concurrency ${concurrency} for ${series.Name}`);
-
-              const fetchTasks = seasons.map(season => async () => {
-                try {
-                  const episodeData = await fetchEpisodesREST(server, token, series.Id, season.Id);
-                  const episodes = episodeData?.Items || [];
-
-                  if (!episodes.length && episodeData?.TotalRecordCount > 0) {
-                    logDebug(`[Debug] Episode API returned no items but TotalRecordCount is ${episodeData.TotalRecordCount}, trying folder API fallback`);
-                    const altEpisodeData = await fetchFolderItems(server, token, season.Id);
-                    const altEpisodes = altEpisodeData?.Items?.filter(item => item.Type === 'Episode') || [];
-                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${altEpisodes.length} episodes (fallback API)`);
-                    return altEpisodes;
-                  } else {
-                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${episodes.length} episodes`);
-                    return episodes;
-                  }
-                } catch (seasonError) {
-                  const errorMsg = `Failed to get episodes for ${series.Name} Season ${season.IndexNumber}: ${seasonError.message}`;
-                  console.warn(errorMsg);
-                  return [];
-                }
-              });
-
-              const episodeArrays = await parallelFetch(fetchTasks, concurrency);
-              seriesEpisodes = episodeArrays.flat();
-              logDebug(`[Parallel] Completed fetching ${seriesEpisodes.length} episodes for ${series.Name}`);
-            } else {
-              // Sequential fallback (original logic)
-              for (const season of seasons) {
-                try {
-                  const episodeData = await fetchEpisodesREST(server, token, series.Id, season.Id);
-                  const episodes = episodeData?.Items || [];
-
-                  if (!episodes.length && episodeData?.TotalRecordCount > 0) {
-                    logDebug(`[Debug] Episode API returned no items but TotalRecordCount is ${episodeData.TotalRecordCount}, trying folder API fallback`);
-                    const altEpisodeData = await fetchFolderItems(server, token, season.Id);
-                    const altEpisodes = altEpisodeData?.Items?.filter(item => item.Type === 'Episode') || [];
-                    seriesEpisodes.push(...altEpisodes);
-                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${altEpisodes.length} episodes (fallback API)`);
-                  } else {
-                    seriesEpisodes.push(...episodes);
-                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${episodes.length} episodes`);
-                  }
-
-                  await new Promise(resolve => setTimeout(resolve, 100));
-
-                } catch (seasonError) {
-                  const errorMsg = `Failed to get episodes for ${series.Name} Season ${season.IndexNumber}: ${seasonError.message}`;
-                  console.warn(errorMsg);
-                  updateProgress(i, seriesItems.length, `Expanding ${series.Name}...`, errorMsg);
-                }
-              }
-            }
-
-            if (seriesEpisodes.length > 0) {
-              downloadableItems.push(...seriesEpisodes);
-              totalEpisodesFromSeries += seriesEpisodes.length;
-              successfulSeries++;
-              logDebug(`[Debug] Series ${series.Name}: Added ${seriesEpisodes.length} episodes (running total: ${totalEpisodesFromSeries})`);
-            }
-
-            if (i < seriesItems.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, CONFIG.seasonDelayMs));
-            }
-
-          } catch (seriesError) {
-            const errorMsg = `Failed to expand TV series ${series.Name}: ${seriesError.message}`;
-            console.error(errorMsg);
-            updateProgress(i, seriesItems.length, `Expanding ${series.Name}...`, errorMsg);
-          }
-        }
-
-        logDebug(`[Debug] TV series expansion complete: ${totalEpisodesFromSeries} episodes from ${successfulSeries}/${seriesItems.length} series`);
-
-        if (totalEpisodesFromSeries > 0) {
-          showNotification(`Expanded ${successfulSeries} TV series into ${totalEpisodesFromSeries} episodes`, 'info', 3000);
-        }
-      }
-
-      // Process Music Artists → Albums → Tracks
-      const artistItems = items.filter(item => item.Type === 'MusicArtist');
-      const albumItems = items.filter(item => item.Type === 'MusicAlbum');
-
-      if (artistItems.length > 0) {
-        updateProgress(0, artistItems.length, "Expanding Music Artists...");
-        showNotification(`Found ${artistItems.length} artists, expanding to tracks...`, 'info', 3000);
-
-        let totalTracksFromArtists = 0;
-        let successfulArtists = 0;
-
-        for (let i = 0; i < artistItems.length; i++) {
-          if (abortController.signal.aborted) {
-            logDebug('[Debug] Artist expansion cancelled by user');
-            throw new Error('Operation cancelled');
-          }
-
-          const artist = artistItems[i];
-          try {
-            updateProgress(i, artistItems.length, `Expanding ${artist.Name}...`);
-            logDebug(`[Debug] Expanding artist ${i + 1}/${artistItems.length}: ${artist.Name} (ID: ${artist.Id})`);
-
-            let artistTracks = [];
-
-            if (SERVER_TYPE === 'plex') {
-              // Fetch albums from artist
-              const albumUrl = `${server}/library/metadata/${artist.Id}/children?X-Plex-Token=${token}`;
-              const albumData = await fetchWithRetry(albumUrl);
-              const albums = albumData.MediaContainer?.Metadata || [];
-
-              for (const album of albums) {
-                if (abortController.signal.aborted) break;
-
-                const trackUrl = `${server}/library/metadata/${album.ratingKey}/children?X-Plex-Token=${token}`;
-                const trackData = await fetchWithRetry(trackUrl);
-                const tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
-                artistTracks.push(...tracks);
-                logDebug(`[Debug] Artist ${artist.Name}, Album ${album.title}: ${tracks.length} tracks`);
-
-                await new Promise(resolve => setTimeout(resolve, 100));
-              }
-            } else {
-              // Emby/Jellyfin: fetch all audio items recursively under artist
-              const prefix = apiPrefix();
-              const params = new URLSearchParams({
-                ParentId: artist.Id, Recursive: 'true', IncludeItemTypes: 'Audio',
-                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
-              });
-              const url = `${server}${prefix}/Items?${params.toString()}`;
-              const data = await fetchWithRetry(url);
-              artistTracks = data?.Items || [];
-            }
-
-            if (artistTracks.length > 0) {
-              downloadableItems.push(...artistTracks);
-              totalTracksFromArtists += artistTracks.length;
-              successfulArtists++;
-              logDebug(`[Debug] Artist ${artist.Name}: Added ${artistTracks.length} tracks (running total: ${totalTracksFromArtists})`);
-            }
-
-            if (i < artistItems.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, 100));
-            }
-          } catch (artistError) {
-            const errorMsg = `Failed to expand artist ${artist.Name}: ${artistError.message}`;
-            console.error(errorMsg);
-            updateProgress(i, artistItems.length, `Expanding ${artist.Name}...`, errorMsg);
-          }
-        }
-
-        logDebug(`[Debug] Artist expansion complete: ${totalTracksFromArtists} tracks from ${successfulArtists}/${artistItems.length} artists`);
-        if (totalTracksFromArtists > 0) {
-          showNotification(`Expanded ${successfulArtists} artists into ${totalTracksFromArtists} tracks`, 'info', 3000);
-        }
-      }
-
-      if (albumItems.length > 0) {
-        updateProgress(0, albumItems.length, "Expanding Music Albums...");
-        let totalTracksFromAlbums = 0;
-
-        for (let i = 0; i < albumItems.length; i++) {
-          if (abortController.signal.aborted) break;
-          const album = albumItems[i];
-          try {
-            let albumTracks = [];
-
-            if (SERVER_TYPE === 'plex') {
-              const trackUrl = `${server}/library/metadata/${album.Id}/children?X-Plex-Token=${token}`;
-              const trackData = await fetchWithRetry(trackUrl);
-              albumTracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
-            } else {
-              const prefix = apiPrefix();
-              const params = new URLSearchParams({
-                ParentId: album.Id, IncludeItemTypes: 'Audio',
-                Fields: 'Path,FileName,MediaSources,Container,MediaType', api_key: token
-              });
-              const url = `${server}${prefix}/Items?${params.toString()}`;
-              const data = await fetchWithRetry(url);
-              albumTracks = data?.Items || [];
-            }
-
-            downloadableItems.push(...albumTracks);
-            totalTracksFromAlbums += albumTracks.length;
-            logDebug(`[Debug] Album ${album.Name}: Added ${albumTracks.length} tracks`);
-          } catch (albumError) {
-            console.error(`Failed to expand album ${album.Name}:`, albumError);
-          }
-        }
-
-        logDebug(`[Debug] Album expansion complete: ${totalTracksFromAlbums} tracks from ${albumItems.length} albums`);
-      }
-
-      // Process regular Folders (recursive scan)
-      const folderItems = items.filter(item => item.Type === 'Folder' && item.IsFolder);
-      if (folderItems.length > 0) {
-        updateProgress(0, folderItems.length, "Scanning subfolders...");
-        showNotification(`Found ${folderItems.length} subfolders, scanning recursively...`, 'info', 3000);
-
-        let totalItemsFromFolders = 0;
-        let successfulFolders = 0;
-
-        for (let i = 0; i < folderItems.length; i++) {
-          if (abortController.signal.aborted) {
-            logDebug('[Debug] Subfolder scanning cancelled by user');
-            throw new Error('Operation cancelled');
-          }
-
-          const folder = folderItems[i];
-          try {
-            const progressText = `Folder ${i + 1}/${folderItems.length}: ${folder.Name}`;
-            updateProgress(i, folderItems.length, progressText);
-            logDebug(`[Debug] Scanning subfolder ${i + 1}/${folderItems.length}: ${folder.Name} (ID: ${folder.Id})`);
-
-            // Recursively fetch items from this subfolder
-            const subfolderItems = await fetchAllFolderItems(server, token, folder.Id);
-            logDebug(`[Debug] Subfolder ${folder.Name}: Found ${subfolderItems.length} items`);
-
-            // Filter for downloadable items
-            const subfolderDownloadables = subfolderItems.filter(item => {
-              const isStandardDownloadable = ['Movie', 'Episode', 'Audio', 'Video'].includes(item.Type) && !item.IsFolder;
-              const isVideoFile = item.MediaType === 'Video' && !item.IsFolder;
-              const isAudioFile = item.MediaType === 'Audio' && !item.IsFolder;
-              const hasVideoContainer = item.Container && ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v'].includes(item.Container.toLowerCase()) && !item.IsFolder;
-              const hasAudioContainer = item.Container && ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a'].includes(item.Container.toLowerCase()) && !item.IsFolder;
-              return isStandardDownloadable || isVideoFile || isAudioFile || hasVideoContainer || hasAudioContainer;
-            });
-
-            if (subfolderDownloadables.length > 0) {
-              downloadableItems.push(...subfolderDownloadables);
-              totalItemsFromFolders += subfolderDownloadables.length;
-              successfulFolders++;
-              logDebug(`[Debug] Subfolder ${folder.Name}: Added ${subfolderDownloadables.length} items (running total: ${totalItemsFromFolders})`);
-            } else {
-              logDebug(`[Debug] Subfolder ${folder.Name}: No direct downloadable items found`);
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-          } catch (folderError) {
-            const errorMsg = `Failed to scan subfolder ${folder.Name}: ${folderError.message}`;
-            console.error(errorMsg);
-            updateProgress(i, folderItems.length, `Scanning ${folder.Name}...`, errorMsg);
-          }
-        }
-
-        logDebug(`[Debug] Subfolder scanning complete: ${totalItemsFromFolders} items from ${successfulFolders}/${folderItems.length} folders`);
-
-        if (totalItemsFromFolders > 0) {
-          showNotification(`Scanned ${successfulFolders} subfolders and found ${totalItemsFromFolders} downloadable items`, 'info', 3000);
-        }
-      }
+      downloadableItems.push(...await expandAll(server, token, containers));
 
       logDebug(`[Debug] Final count: ${downloadableItems.length} total downloadable items`);
 
@@ -13964,10 +13534,7 @@ animation: fadeIn 0.3s ease;
           `- MediaTypes: ${mediaTypes || 'none'}\n` +
           `- Containers: ${containers || 'none'}\n` +
           `- Folders: ${items.filter(i => i.IsFolder).length}\n` +
-          `- Series processed: ${seriesItems.length}\n` +
-          `- Artists processed: ${artistItems.length}\n` +
-          `- Albums processed: ${albumItems.length}\n` +
-          `- Collections processed: ${boxSetItems.length}\n\n` +
+          `- Containers expanded: ${containers.length}\n\n` +
           `This might be because the items have different types than expected, or expansion failed. Check the console for detailed logs of what was processed.`
         );
       }
@@ -13984,7 +13551,7 @@ animation: fadeIn 0.3s ease;
           const details = [
             `${downloadableItems.length} total items to download`,
             episodeItems > 0 && directItems > 0 ? `${directItems} direct files + ${episodeItems} episodes` :
-              episodeItems > 0 ? `${episodeItems} episodes from ${seriesItems.length} TV series` :
+              episodeItems > 0 ? `${episodeItems} episodes` :
                 `${directItems} direct files`,
             `Output format: ${CONFIG.outputFormats[Settings.get('outputFormat')]}`
           ];
