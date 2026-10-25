@@ -6040,7 +6040,11 @@ Note: If blocked, right-click → Open, or run in Terminal:
     dialog.querySelector('#email-links').addEventListener('click', () => {
       const mailtoLink = OutputFormatters.email(uniqueItems, server, token);
       window.location.href = mailtoLink;
-      showNotification('Opening email client...', 'success');
+      showNotification(
+        uniqueItems.length > EMAIL_LINK_CAP
+          ? `Opening email client with the first ${EMAIL_LINK_CAP} of ${uniqueItems.length} links. Use Copy to Clipboard for the full list.`
+          : 'Opening email client...',
+        'success', uniqueItems.length > EMAIL_LINK_CAP ? 6000 : undefined);
     });
 
     // Download Manager
@@ -11632,6 +11636,7 @@ animation: fadeIn 0.3s ease;
   }
 
   // ---------- Output Formatters ----------
+  const EMAIL_LINK_CAP = 25;
   const OutputFormatters = {
     links: (items, server, token) => {
       return items.filter(item => item && item.Id).map(item => getFullBypassUrl(item, server, token)).join('\n');
@@ -11898,9 +11903,13 @@ animation: fadeIn 0.3s ease;
     },
 
     email: (items, server, token) => {
-      // Generate mailto: link with download links in body
-      const urls = items.filter(item => item && item.Id)
-        .map(item => getFullBypassUrl(item, server, token));
+      // Generate mailto: link with download links in body. mailto: URLs have
+      // length limits, so cap the links (EMAIL_LINK_CAP) and say what was left out.
+      const all = items.filter(item => item && item.Id);
+      const urls = all.slice(0, EMAIL_LINK_CAP).map(item => getFullBypassUrl(item, server, token));
+      if (all.length > EMAIL_LINK_CAP) {
+        urls.push('', `…and ${all.length - EMAIL_LINK_CAP} more — use Copy to Clipboard for the full list.`);
+      }
 
       const subject = encodeURIComponent(`PulseGrab Downloads (${items.length} items)`);
       const body = encodeURIComponent(
