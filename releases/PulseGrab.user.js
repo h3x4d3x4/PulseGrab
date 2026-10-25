@@ -489,7 +489,7 @@
         }
 
         if (response.status === 404) {
-          console.log('[PulseGrab] Update check: no releases found');
+          logDebug('Update check: no releases found');
           this._lastResult = null;
           GM_setValue('pulse_lastUpdateResult', null);
           return null;
@@ -1216,7 +1216,7 @@
           }
           const error = new Error(message);
           error.gmResponse = response;
-          console.warn('[PulseGrab] request failed:', url, response);
+          console.warn('[PulseGrab] request failed:', redactToken(url), error.message);
           reject(error);
         },
         ontimeout: () => reject(new Error(`timed out after ${(options.signal && options.signal.timeout) || 2000}ms`))
@@ -1224,9 +1224,19 @@
     });
   }
 
+  // Mask credentials before anything URL-shaped reaches the console: query-string
+  // keys, MediaBrowser `Token="…"` headers and Plex `/t_<hex>_` session paths.
+  function redactToken(str) {
+    if (typeof str !== 'string') return str;
+    return str
+      .replace(/(api_?key|x-plex-token|token)=[^&\s"'<>]*/gi, '$1=***')
+      .replace(/(Token\s*=\s*")[^"]*"/gi, '$1***"')
+      .replace(/\/t_[0-9a-f]+_/gi, '/t_***_');
+  }
+
   function logDebug(...args) {
     if (Settings.get('debugMode')) {
-      console.log('[PulseGrab]', ...args);
+      console.log('[PulseGrab]', ...args.map(redactToken));
     }
   }
 
@@ -1672,7 +1682,7 @@
     } catch (error) {
       // Only log connection failures if they're unexpected (not timeout/network errors)
       if (!error.name?.includes('Abort') && !error.message?.includes('Failed to fetch')) {
-        console.log(`[JDownloader] Connection test failed on port ${testPort}:`, error.message);
+        logDebug(`[JDownloader] Connection test failed on port ${testPort}:`, error.message);
       }
       return false;
     }
@@ -5956,7 +5966,7 @@ echo "============================================================"
     const blob = new Blob([scriptContent], { type: fileType });
     saveBlob(blob, filename);
 
-    console.log(`[SUCCESS] ${platform.toUpperCase()} rename script downloaded: ${filename}`);
+    logDebug(`[SUCCESS] ${platform.toUpperCase()} rename script downloaded: ${filename}`);
   }
 
   // ---------- wget/curl Script Generator ----------
@@ -6126,7 +6136,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     }
 
     showNotification(`wget/curl script downloaded!\n\n${instructions}`, 'success', 8000);
-    console.log(`[SUCCESS] wget/curl download script generated: ${filename}`);
+    logDebug(`[SUCCESS] wget/curl download script generated: ${filename}`);
   }
 
 
@@ -6793,7 +6803,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         // Auto-close after 5 seconds
         setTimeout(() => notification.close(), 5000);
       } catch (error) {
-        console.log('[PulseGrab] Notification error:', error);
+        logDebug('[PulseGrab] Notification error:', error);
       }
     }
   }
@@ -6842,12 +6852,12 @@ Note: If blocked, right-click → Open, or run in Terminal:
       flex-direction: column;
       
     `;
-    console.log('[DownloadManager] Created manager with dimensions - max-width: 1200px, width: 98%, max-height: 96vh, min-height: 80vh');
+    logDebug('[DownloadManager] Created manager with dimensions - max-width: 1200px, width: 98%, max-height: 96vh, min-height: 80vh');
 
     // Apply dark mode immediately if enabled
     if (Settings.get('darkMode')) {
       manager.setAttribute('data-dark-mode', 'true');
-      console.log('[DownloadManager] Applied dark mode attribute on creation');
+      logDebug('[DownloadManager] Applied dark mode attribute on creation');
     }
 
     // Initialize or restore download queue
@@ -7788,7 +7798,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         // Download all items in group
         window[`downloadGroup_${groupId}`] = () => {
-          console.log(`[DownloadManager] Starting group download: ${folderPath}`);
+          logDebug(`[DownloadManager] Starting group download: ${folderPath}`);
           isPaused = false;
           isDownloading = true;
           // Set all items in group to pending
@@ -7861,7 +7871,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         case 'pause':
           // Pause a currently downloading item – abort it, mark as user-initiated so catch block doesn't overwrite status
-          console.log(`[DownloadManager] Pausing item ${index}: ${item.name}`);
+          logDebug(`[DownloadManager] Pausing item ${index}: ${item.name}`);
           userAbortedIndices.add(index);
           if (activeDownloads.has(index)) {
             const download = activeDownloads.get(index);
@@ -7877,7 +7887,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         case 'stop':
           // Stop and reset to pending – abort and mark so catch block keeps 'pending' status
-          console.log(`[DownloadManager] Stopping item ${index}: ${item.name}`);
+          logDebug(`[DownloadManager] Stopping item ${index}: ${item.name}`);
           userAbortedIndices.add(index);
           if (activeDownloads.has(index)) {
             const download = activeDownloads.get(index);
@@ -7895,7 +7905,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         case 'cancel':
           // Legacy alias for pause – same guard
-          console.log(`[DownloadManager] Cancel (pause) item ${index}: ${item.name}`);
+          logDebug(`[DownloadManager] Cancel (pause) item ${index}: ${item.name}`);
           userAbortedIndices.add(index);
           if (activeDownloads.has(index)) {
             const download = activeDownloads.get(index);
@@ -7911,7 +7921,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           break;
 
         case 'retry':
-          console.log(`[DownloadManager] Retrying item ${index}: ${item.name}`);
+          logDebug(`[DownloadManager] Retrying item ${index}: ${item.name}`);
           item.status = 'pending';
           item.error = null;
           item.progress = 0;
@@ -7925,7 +7935,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           break;
 
         case 'redownload':
-          console.log(`[DownloadManager] Re-downloading item ${index}: ${item.name}`);
+          logDebug(`[DownloadManager] Re-downloading item ${index}: ${item.name}`);
           item.status = 'pending';
           item.progress = 0;
           item.error = null;
@@ -8010,7 +8020,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       const fetchHeaders = {};
       if (isResume) {
         fetchHeaders['Range'] = `bytes=${resumeFrom}-`;
-        console.log(`[DownloadManager] Resuming item ${index} from byte ${resumeFrom}: ${item.name}`);
+        logDebug(`[DownloadManager] Resuming item ${index} from byte ${resumeFrom}: ${item.name}`);
       }
 
       try {
@@ -8178,7 +8188,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
               // Save chunks for range-resume on next Start
               item._savedChunks = item._liveChunks ? item._liveChunks.slice() : [];
               item._savedReceivedLength = item._liveReceivedLength || 0;
-              console.log(`[DownloadManager] Paused at byte ${item._savedReceivedLength}, ${item._savedChunks.length} chunks saved: ${item.name}`);
+              logDebug(`[DownloadManager] Paused at byte ${item._savedReceivedLength}, ${item._savedChunks.length} chunks saved: ${item.name}`);
             } else {
               // Stopped — discard saved data, truly restart next time
               item._savedChunks = null;
@@ -8191,7 +8201,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
             item._savedReceivedLength = item._liveReceivedLength || 0;
             item._liveChunks = null;
             item.status = 'paused';
-            console.log('[DownloadManager] Global pause, saved chunks for resume:', item.name);
+            logDebug('[DownloadManager] Global pause, saved chunks for resume:', item.name);
           }
           renderQueue();
           updateDownloadInfo();
@@ -8218,7 +8228,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
             }
             // Stop further downloads on auth error to prevent spamming
             isPaused = true;
-            console.log('[DownloadManager] Pausing queue due to authentication error');
+            logDebug('[DownloadManager] Pausing queue due to authentication error');
           } else if (error.message.includes('HTTP 404')) {
             errorMessage = 'File not found on server';
           } else if (error.message.includes('HTTP 500') || error.message.includes('HTTP 503')) {
@@ -8365,7 +8375,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         return;
       }
 
-      console.log(`[DownloadManager] Starting ${selectedIndices.length} selected items`);
+      logDebug(`[DownloadManager] Starting ${selectedIndices.length} selected items`);
       isPaused = false;
       downloadOnlySelected = true; // Enable selected-only mode
 
@@ -8403,7 +8413,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
       if (!confirmed) return;
 
-      console.log(`[DownloadManager] Cancelling ${incompleteCount} incomplete items`);
+      logDebug(`[DownloadManager] Cancelling ${incompleteCount} incomplete items`);
 
       // Abort every active download. Concurrent downloads store their
       // controller in activeDownloads (not currentAbortController, which stays
@@ -8939,7 +8949,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     // Log actual computed dimensions after adding to DOM
     setTimeout(() => {
       const computedStyle = window.getComputedStyle(manager);
-      console.log('[DownloadManager] Manager actual dimensions:', {
+      logDebug('[DownloadManager] Manager actual dimensions:', {
         width: computedStyle.width,
         height: computedStyle.height,
         maxWidth: computedStyle.maxWidth,
@@ -9485,7 +9495,7 @@ animation: fadeIn 0.3s ease;
     // Apply dark mode immediately if enabled
     if (isDarkMode) {
       panel.setAttribute('data-dark-mode', 'true');
-      console.log('[PulseGrab] Applied dark mode attribute to settings panel');
+      logDebug('[PulseGrab] Applied dark mode attribute to settings panel');
     }
 
     const currentSettings = Settings.getAll();
@@ -12561,7 +12571,7 @@ animation: fadeIn 0.3s ease;
   }
 
   async function processLibrary(server, token, libraryId, libraryName, requestDelay = 0, skipWatched = false, videosOnly = false) {
-    console.log(`[Library] Processing library: ${libraryName} (${libraryId})`);
+    logDebug(`[Library] Processing library: ${libraryName} (${libraryId})`);
     updateProgress(0, 0, `Scanning library: ${libraryName}...`);
 
     const allItems = [];
@@ -12576,7 +12586,7 @@ animation: fadeIn 0.3s ease;
         { delay: requestDelay, skipWatched }
       );
 
-      console.log(`[Library] Found ${libraryItems.length} items in ${libraryName}`);
+      logDebug(`[Library] Found ${libraryItems.length} items in ${libraryName}`);
 
       // Process each item based on type
       for (let i = 0; i < libraryItems.length; i++) {
@@ -12602,7 +12612,7 @@ animation: fadeIn 0.3s ease;
         try {
           if (item.Type === 'Series') {
             // Expand TV series to episodes
-            console.log(`[Library] Expanding series: ${item.Name}`);
+            logDebug(`[Library] Expanding series: ${item.Name}`);
 
             // Fetch seasons - manual fetch because fetchSeasonsREST doesn't support options yet
             const seasons = await fetchSeasonsREST(server, token, item.Id);
@@ -12628,11 +12638,11 @@ animation: fadeIn 0.3s ease;
               }
 
               allItems.push(...episodes);
-              console.log(`[Library] Added ${episodes.length} episodes from ${season.Name}`);
+              logDebug(`[Library] Added ${episodes.length} episodes from ${season.Name}`);
             }
           } else if (item.Type === 'MusicArtist') {
             // Expand music artist → albums → tracks
-            console.log(`[Library] Expanding artist: ${item.Name}`);
+            logDebug(`[Library] Expanding artist: ${item.Name}`);
 
             if (SERVER_TYPE === 'plex') {
               const albumUrl = `${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`;
@@ -12648,7 +12658,7 @@ animation: fadeIn 0.3s ease;
                 let tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
                 if (skipWatched) tracks = tracks.filter(t => !t.UserData?.Played);
                 allItems.push(...tracks);
-                console.log(`[Library] Added ${tracks.length} tracks from ${album.title}`);
+                logDebug(`[Library] Added ${tracks.length} tracks from ${album.title}`);
               }
             } else {
               // Emby/Jellyfin: fetch all audio items recursively under artist
@@ -12662,11 +12672,11 @@ animation: fadeIn 0.3s ease;
               const data = await fetchWithRetry(url);
               const tracks = data?.Items || [];
               allItems.push(...tracks);
-              console.log(`[Library] Added ${tracks.length} tracks from artist ${item.Name}`);
+              logDebug(`[Library] Added ${tracks.length} tracks from artist ${item.Name}`);
             }
           } else if (item.Type === 'MusicAlbum') {
             // Expand music album → tracks
-            console.log(`[Library] Expanding album: ${item.Name}`);
+            logDebug(`[Library] Expanding album: ${item.Name}`);
 
             if (SERVER_TYPE === 'plex') {
               const trackUrl = `${server}/library/metadata/${item.Id}/children?X-Plex-Token=${token}`;
@@ -12674,7 +12684,7 @@ animation: fadeIn 0.3s ease;
               let tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
               if (skipWatched) tracks = tracks.filter(t => !t.UserData?.Played);
               allItems.push(...tracks);
-              console.log(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
+              logDebug(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
             } else {
               const prefix = apiPrefix();
               const params = new URLSearchParams({
@@ -12686,11 +12696,11 @@ animation: fadeIn 0.3s ease;
               const data = await fetchWithRetry(url);
               const tracks = data?.Items || [];
               allItems.push(...tracks);
-              console.log(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
+              logDebug(`[Library] Added ${tracks.length} tracks from album ${item.Name}`);
             }
           } else if (item.Type === 'BoxSet' || item.Type === 'Collection') {
             // Expand collections
-            console.log(`[Library] Expanding collection: ${item.Name}`);
+            logDebug(`[Library] Expanding collection: ${item.Name}`);
             const collectionItems = await processCollection(server, token, item.Id, { delay: requestDelay, skipWatched });
             allItems.push(...collectionItems);
           } else if (['Movie', 'Video', 'Audio', 'Episode'].includes(item.Type)) {
@@ -12712,7 +12722,7 @@ animation: fadeIn 0.3s ease;
       throw error;
     }
 
-    console.log(`[Library] Library ${libraryName} complete: ${allItems.length} downloadable items`);
+    logDebug(`[Library] Library ${libraryName} complete: ${allItems.length} downloadable items`);
 
     // Ensure all items have names before returning
     const namedItems = allItems.map(item => ensureItemName(item));
@@ -12720,21 +12730,21 @@ animation: fadeIn 0.3s ease;
   }
 
   async function processServerRoot(server, token) {
-    console.log('[Server] Starting whole-server download...');
+    logDebug('[Server] Starting whole-server download...');
     updateProgress(0, 0, 'Fetching libraries...');
     showNotification('Scanning entire server...', 'info', 3000);
 
     try {
       // Get all libraries
       const allLibraries = await fetchAllLibraries(server, token);
-      console.log(`[Server] Found ${allLibraries.length} total libraries`);
+      logDebug(`[Server] Found ${allLibraries.length} total libraries`);
 
       // Filter to media libraries only
       const mediaLibraries = allLibraries.filter(lib =>
         ['movies', 'tvshows', 'music', 'homevideos'].includes(lib.CollectionType?.toLowerCase())
       );
 
-      console.log(`[Server] Found ${mediaLibraries.length} media libraries:`,
+      logDebug(`[Server] Found ${mediaLibraries.length} media libraries:`,
         mediaLibraries.map(l => l.Name).join(', '));
 
       if (mediaLibraries.length === 0) {
@@ -12764,8 +12774,8 @@ animation: fadeIn 0.3s ease;
       const originalMaxItems = CONFIG.maxServerItems;
       CONFIG.maxServerItems = options.limit || 10000;
 
-      console.log(`[Server] Starting download with options:`, options);
-      console.log(`[Server] Processing ${librariesToProcess.length} selected libraries`);
+      logDebug(`[Server] Starting download with options:`, options);
+      logDebug(`[Server] Processing ${librariesToProcess.length} selected libraries`);
 
       // Process each library
       const allItems = [];
@@ -12777,13 +12787,13 @@ animation: fadeIn 0.3s ease;
         const library = librariesToProcess[i];
         processingStats.current = i + 1;
 
-        console.log(`[Server] Processing library ${i + 1}/${librariesToProcess.length}: ${library.Name}`);
+        logDebug(`[Server] Processing library ${i + 1}/${librariesToProcess.length}: ${library.Name}`);
 
         try {
           const libraryItems = await processLibrary(server, token, library.Id, library.Name, requestDelay, skipWatched, videosOnly);
           allItems.push(...libraryItems);
 
-          console.log(`[Server] Library ${library.Name} complete: ${libraryItems.length} items (running total: ${allItems.length})`);
+          logDebug(`[Server] Library ${library.Name} complete: ${libraryItems.length} items (running total: ${allItems.length})`);
 
           if (allItems.length >= CONFIG.maxServerItems) {
             console.warn(`[Server] Reached maximum server items limit: ${CONFIG.maxServerItems}`);
@@ -12805,7 +12815,7 @@ animation: fadeIn 0.3s ease;
       // Restore config
       CONFIG.maxServerItems = originalMaxItems;
 
-      console.log(`[Server] Server scan complete: ${allItems.length} total items from ${librariesToProcess.length} libraries`);
+      logDebug(`[Server] Server scan complete: ${allItems.length} total items from ${librariesToProcess.length} libraries`);
 
       if (allItems.length === 0) {
         throw new Error('No downloadable items found on server');
@@ -13238,7 +13248,7 @@ animation: fadeIn 0.3s ease;
       new URL(address);
       return address;
     } catch (error) {
-      console.error('Invalid server address:', raw, error);
+      console.error('Invalid server address:', redactToken(String(raw)), error.message);
       return null;
     }
   }
@@ -13462,7 +13472,7 @@ animation: fadeIn 0.3s ease;
       case 'jellyfin': pageType = detectPageTypeJellyfin(); break;
       default:         pageType = detectPageTypeEmby(); break;
     }
-    console.log(`[PulseGrab] Detected page type: ${pageType} (server: ${SERVER_TYPE})`);
+    logDebug(`[PulseGrab] Detected page type: ${pageType} (server: ${SERVER_TYPE})`);
     return pageType;
   }
 
@@ -13472,13 +13482,13 @@ animation: fadeIn 0.3s ease;
       const search = window.location.search;
       const combined = hash + search;
 
-      console.log(`[Debug] Extracting folder ID from: ${combined}`);
+      logDebug(`[Debug] Extracting folder ID from: ${combined}`);
 
       // Plex-specific: extract source= (section ID) from library URL
       if (SERVER_TYPE === 'plex') {
         let plexMatch = combined.match(/source=(\d+)/);
         if (plexMatch) {
-          console.log(`[Debug] Found Plex source/sectionId: ${plexMatch[1]}`);
+          logDebug(`[Debug] Found Plex source/sectionId: ${plexMatch[1]}`);
           return plexMatch[1];
         }
         plexMatch = combined.match(/key=%2Flibrary%2Fmetadata%2F(\d+)/i)
@@ -13490,30 +13500,30 @@ animation: fadeIn 0.3s ease;
       if (SERVER_TYPE === 'jellyfin') {
         let jfMatch = combined.match(/topParentId=([^&#]+)/i);
         if (jfMatch) {
-          console.log(`[Debug] Found Jellyfin topParentId: ${jfMatch[1]}`);
+          logDebug(`[Debug] Found Jellyfin topParentId: ${jfMatch[1]}`);
           return jfMatch[1];
         }
       }
 
       let match = combined.match(/parentId=([^&#]+)/i);
       if (match) {
-        console.log(`[Debug] Found parentId: ${match[1]}`);
+        logDebug(`[Debug] Found parentId: ${match[1]}`);
         return match[1];
       }
 
       match = combined.match(/(?:^|[?&#])id=([^&#]+)/i);
       if (match) {
-        console.log(`[Debug] Found general id: ${match[1]}`);
+        logDebug(`[Debug] Found general id: ${match[1]}`);
         return match[1];
       }
 
       match = combined.match(/\/(movies|tv|shows|music|genres|tags|folders|collections)\/([^\/\?]+)/i);
       if (match) {
-        console.log(`[Debug] Found path-style id: ${match[2]}`);
+        logDebug(`[Debug] Found path-style id: ${match[2]}`);
         return match[2];
       }
 
-      console.log(`[Debug] No folder ID found, trying to extract from DOM`);
+      logDebug(`[Debug] No folder ID found, trying to extract from DOM`);
 
       const itemElements = document.querySelectorAll('[data-id], [data-itemid]');
       const folderElement = Array.from(itemElements).find(el => {
@@ -13523,11 +13533,11 @@ animation: fadeIn 0.3s ease;
 
       if (folderElement) {
         const domId = folderElement.getAttribute('data-id') || folderElement.getAttribute('data-itemid');
-        console.log(`[Debug] Found DOM-based id: ${domId}`);
+        logDebug(`[Debug] Found DOM-based id: ${domId}`);
         return domId;
       }
 
-      console.log(`[Debug] No folder ID found anywhere`);
+      logDebug(`[Debug] No folder ID found anywhere`);
       return null;
     } catch (error) {
       console.error('Error getting folder ID:', error);
@@ -13591,7 +13601,7 @@ animation: fadeIn 0.3s ease;
           throw error;
         }
 
-        console.warn(`Attempt ${i + 1} failed for ${url}:`, error.message);
+        console.warn(`Attempt ${i + 1} failed for ${redactToken(url)}:`, redactToken(error.message));
 
         if (i === attempts - 1) throw error;
 
@@ -13934,15 +13944,15 @@ animation: fadeIn 0.3s ease;
     const cacheKey = RequestCache.makeKey(url);
     const cached = RequestCache.get(cacheKey);
     if (cached) {
-      console.log(`[Debug] Using cached episodes for season ${seasonId}`);
+      logDebug(`[Debug] Using cached episodes for season ${seasonId}`);
       return cached;
     }
 
-    console.log(`[Debug] Fetching episodes from REST API: ${url.split('?')[0]}`);
+    logDebug(`[Debug] Fetching episodes from REST API: ${url.split('?')[0]}`);
 
     try {
       const data = await fetchWithRetry(url);
-      console.log(`[Debug] REST API success for season ${seasonId}:`, {
+      logDebug(`[Debug] REST API success for season ${seasonId}:`, {
         items: data?.Items?.length || 0,
         total: data?.TotalRecordCount || 0
       });
@@ -13955,7 +13965,7 @@ animation: fadeIn 0.3s ease;
       // Check if it's a 404 - API endpoint doesn't exist
       const is404 = error.message && error.message.includes('404');
       if (is404) {
-        console.log(`[Debug] REST API returned 404 for season ${seasonId} - API endpoint doesn't exist, will use fallback`);
+        logDebug(`[Debug] REST API returned 404 for season ${seasonId} - API endpoint doesn't exist, will use fallback`);
         return { Items: [], TotalRecordCount: 0, apiNotAvailable: true };
       }
 
@@ -14042,7 +14052,7 @@ animation: fadeIn 0.3s ease;
       let collectionInfo = null;
       try {
         collectionInfo = await getItemInfo(server, token, collectionId);
-        console.log(`[Debug] Collection info:`, collectionInfo);
+        logDebug(`[Debug] Collection info:`, collectionInfo);
         // Store collection name in global for use in showResultsDialog
         if (collectionInfo?.Name) {
           currentCollectionName = collectionInfo.Name;
@@ -14055,14 +14065,14 @@ animation: fadeIn 0.3s ease;
       let errorMessages = [];
 
       try {
-        console.log(`[Debug] Trying collection API for ID: ${collectionId}`);
+        logDebug(`[Debug] Trying collection API for ID: ${collectionId}`);
         items = await fetchAllCollectionItems(server, token, collectionId, (current, total, status) => {
           updateProgress(current, total, status);
         }, options);
-        console.log(`[Debug] Collection API returned ${items.length} items`);
+        logDebug(`[Debug] Collection API returned ${items.length} items`);
 
         if (items.length > 0) {
-          console.log(`[Debug] Collection API successful`);
+          logDebug(`[Debug] Collection API successful`);
         }
       } catch (error) {
         console.warn('Collection API failed:', error);
@@ -14071,11 +14081,11 @@ animation: fadeIn 0.3s ease;
 
       if (items.length === 0) {
         try {
-          console.log(`[Debug] Trying folder API fallback for collection ${collectionId}`);
+          logDebug(`[Debug] Trying folder API fallback for collection ${collectionId}`);
           items = await fetchAllFolderItems(server, token, collectionId, (current, total, status) => {
             updateProgress(current, total, status);
           }, options);
-          console.log(`[Debug] Folder API fallback returned ${items.length} items`);
+          logDebug(`[Debug] Folder API fallback returned ${items.length} items`);
         } catch (folderError) {
           console.warn('Folder API fallback also failed:', folderError);
           errorMessages.push(`Folder API: ${folderError.message}`);
@@ -14083,10 +14093,10 @@ animation: fadeIn 0.3s ease;
       }
 
       if (items.length === 0) {
-        console.log(`[Debug] Both APIs failed, trying to extract from page content`);
+        logDebug(`[Debug] Both APIs failed, trying to extract from page content`);
         const visibleItems = extractItemsFromPage();
         if (visibleItems.length > 0) {
-          console.log(`[Debug] Extracted ${visibleItems.length} items from page content`);
+          logDebug(`[Debug] Extracted ${visibleItems.length} items from page content`);
           items = await Promise.all(
             visibleItems.map(async (itemId) => {
               try {
@@ -14106,7 +14116,7 @@ animation: fadeIn 0.3s ease;
         throw new Error(`No items found in this collection. Tried multiple approaches but none succeeded.${errorSummary}`);
       }
 
-      console.log(`[Debug] Raw items from collection (first 3):`, items.slice(0, 3));
+      logDebug(`[Debug] Raw items from collection (first 3):`, items.slice(0, 3));
 
       let downloadableItems = [];
       const foundSeasons = [];
@@ -14116,26 +14126,26 @@ animation: fadeIn 0.3s ease;
           downloadableItems.push(item);
         } else if (item.Type === 'Season') {
           foundSeasons.push(item);
-          console.log(`[Debug] Found season: ${item.Name} (ID: ${item.Id})`);
+          logDebug(`[Debug] Found season: ${item.Name} (ID: ${item.Id})`);
         } else if (item.Type === 'Series') {
-          console.log(`[Debug] Found series in collection: ${item.Name}, skipping (not yet supported)`);
+          logDebug(`[Debug] Found series in collection: ${item.Name}, skipping (not yet supported)`);
         }
       }
 
-      console.log(`[Debug] Filtered to ${downloadableItems.length} downloadable items and ${foundSeasons.length} seasons`);
+      logDebug(`[Debug] Filtered to ${downloadableItems.length} downloadable items and ${foundSeasons.length} seasons`);
 
       if (!downloadableItems.length && foundSeasons.length > 0) {
-        console.log(`[Debug] Found only seasons - this appears to be a TV show, not a collection. Expanding seasons to episodes...`);
+        logDebug(`[Debug] Found only seasons - this appears to be a TV show, not a collection. Expanding seasons to episodes...`);
 
         for (const season of foundSeasons) {
           try {
-            console.log(`[Debug] Expanding season: ${season.Name} (ID: ${season.Id})`);
+            logDebug(`[Debug] Expanding season: ${season.Name} (ID: ${season.Id})`);
             updateProgress(foundSeasons.indexOf(season), foundSeasons.length, `Expanding ${season.Name}...`);
 
             const episodeData = await fetchFolderItems(server, token, season.Id, 0, CONFIG.batchSize, options);
             const episodes = episodeData?.Items?.filter(item => item.Type === 'Episode') || [];
 
-            console.log(`[Debug] Season ${season.Name}: Found ${episodes.length} episodes`);
+            logDebug(`[Debug] Season ${season.Name}: Found ${episodes.length} episodes`);
 
             if (episodes.length > 0) {
               downloadableItems.push(...episodes);
@@ -14152,7 +14162,7 @@ animation: fadeIn 0.3s ease;
           }
         }
 
-        console.log(`[Debug] After season expansion: ${downloadableItems.length} total episodes`);
+        logDebug(`[Debug] After season expansion: ${downloadableItems.length} total episodes`);
       }
 
       if (!downloadableItems.length) {
@@ -14229,7 +14239,7 @@ animation: fadeIn 0.3s ease;
       });
     });
 
-    console.log(`[Debug] Extracted ${itemIds.length} item IDs from page:`, itemIds);
+    logDebug(`[Debug] Extracted ${itemIds.length} item IDs from page:`, itemIds);
     return itemIds;
   }
 
@@ -14252,7 +14262,7 @@ animation: fadeIn 0.3s ease;
 
     const tab = getActiveSearchTab();
     const types = tab.types;
-    console.log(`[Debug] Search "${term}" | tab: ${tab.label} | types: ${types ? types.join(',') : 'ALL'}`);
+    logDebug(`[Debug] Search "${term}" | tab: ${tab.label} | types: ${types ? types.join(',') : 'ALL'}`);
 
     if (types && types.length === 0) {
       throw new Error(`The "${tab.label}" tab has nothing downloadable in it. Switch to Movies, Shows, or Episodes.`);
@@ -14267,7 +14277,7 @@ animation: fadeIn 0.3s ease;
       throw new Error(`No results for "${term}"${types ? ` in the ${tab.label} tab` : ''}.`);
     }
 
-    console.log(`[Debug] Search returned ${results.length} items, types:`, [...new Set(results.map(i => i.Type))]);
+    logDebug(`[Debug] Search returned ${results.length} items, types:`, [...new Set(results.map(i => i.Type))]);
 
     const isDownloadable = (item) => {
       if (!item || item.IsFolder) return false;
@@ -14297,7 +14307,7 @@ animation: fadeIn 0.3s ease;
         const children = await fetchAllFolderItems(server, token, container.Id, null, { recursive: true });
         const files = (children || []).filter(isDownloadable);
         downloadableItems.push(...files);
-        console.log(`[Debug] ${container.Type} "${container.Name}" -> ${files.length} files`);
+        logDebug(`[Debug] ${container.Type} "${container.Name}" -> ${files.length} files`);
       } catch (e) {
         console.warn(`[PulseGrab] Could not expand ${container.Type} "${container.Name}":`, e.message);
       }
@@ -14350,14 +14360,14 @@ animation: fadeIn 0.3s ease;
         updateProgress(current, total, status);
       });
 
-      console.log(`[Debug] Folder API returned ${items.length} items for folder ${folderId}`);
+      logDebug(`[Debug] Folder API returned ${items.length} items for folder ${folderId}`);
 
       if (!items.length) {
         throw new Error('No items found in this folder.');
       }
 
-      console.log(`[Debug] Raw folder items (first 5):`, items.slice(0, 5));
-      console.log(`[Debug] All item types found:`, [...new Set(items.map(i => i.Type))]);
+      logDebug(`[Debug] Raw folder items (first 5):`, items.slice(0, 5));
+      logDebug(`[Debug] All item types found:`, [...new Set(items.map(i => i.Type))]);
 
       let downloadableItems = items.filter(item => {
         const isStandardDownloadable = ['Movie', 'Episode', 'Audio', 'Video'].includes(item.Type) && !item.IsFolder;
@@ -14372,7 +14382,7 @@ animation: fadeIn 0.3s ease;
       const seriesItems = items.filter(item => item.Type === 'Series');
       const boxSetItems = items.filter(item => item.Type === 'BoxSet' || item.Type === 'Collection');
 
-      console.log(`[Debug] Found ${downloadableItems.length} direct downloadable items, ${seriesItems.length} TV series, and ${boxSetItems.length} collections/boxsets`);
+      logDebug(`[Debug] Found ${downloadableItems.length} direct downloadable items, ${seriesItems.length} TV series, and ${boxSetItems.length} collections/boxsets`);
 
       // Process Collections/BoxSets
       if (boxSetItems.length > 0) {
@@ -14385,7 +14395,7 @@ animation: fadeIn 0.3s ease;
         for (let i = 0; i < boxSetItems.length; i++) {
           // Check if operation was cancelled
           if (abortController.signal.aborted) {
-            console.log('[Debug] Collection expansion cancelled by user');
+            logDebug('[Debug] Collection expansion cancelled by user');
             throw new Error('Operation cancelled');
           }
 
@@ -14394,21 +14404,21 @@ animation: fadeIn 0.3s ease;
             const progressText = `Collection ${i + 1}/${boxSetItems.length}: ${collection.Name}`;
             updateProgress(i, boxSetItems.length, progressText);
             showNotification(progressText, 'info', 2000);
-            console.log(`[Debug] Expanding collection ${i + 1}/${boxSetItems.length}: ${collection.Name} (ID: ${collection.Id})`);
+            logDebug(`[Debug] Expanding collection ${i + 1}/${boxSetItems.length}: ${collection.Name} (ID: ${collection.Id})`);
 
             // Try collection API first
             let collectionItems = [];
             try {
               const collectionData = await fetchAllCollectionItems(server, token, collection.Id);
               collectionItems = collectionData || [];
-              console.log(`[Debug] Collection ${collection.Name}: Collection API returned ${collectionItems.length} items`);
+              logDebug(`[Debug] Collection ${collection.Name}: Collection API returned ${collectionItems.length} items`);
             } catch (collectionError) {
               console.warn(`[Debug] Collection API failed for ${collection.Name}, trying folder API`);
               // Fallback to folder API
               try {
                 const folderData = await fetchAllFolderItems(server, token, collection.Id);
                 collectionItems = folderData || [];
-                console.log(`[Debug] Collection ${collection.Name}: Folder API returned ${collectionItems.length} items`);
+                logDebug(`[Debug] Collection ${collection.Name}: Folder API returned ${collectionItems.length} items`);
               } catch (folderError) {
                 console.warn(`[Debug] Both APIs failed for collection ${collection.Name}:`, folderError);
               }
@@ -14429,7 +14439,7 @@ animation: fadeIn 0.3s ease;
               const seasonsInCollection = collectionItems.filter(item => item.Type === 'Season');
 
               if (seasonsInCollection.length > 0) {
-                console.log(`[Debug] Collection ${collection.Name}: Found ${seasonsInCollection.length} seasons, expanding to episodes`);
+                logDebug(`[Debug] Collection ${collection.Name}: Found ${seasonsInCollection.length} seasons, expanding to episodes`);
 
                 for (const season of seasonsInCollection) {
                   try {
@@ -14446,10 +14456,10 @@ animation: fadeIn 0.3s ease;
                         const altEpisodeData = await fetchFolderItems(server, token, season.Id);
                         const altEpisodes = altEpisodeData?.Items?.filter(item => item.Type === 'Episode') || [];
                         collectionDownloadables.push(...altEpisodes);
-                        console.log(`[Debug] Collection ${collection.Name}, Season ${season.Name}: ${altEpisodes.length} episodes (fallback)`);
+                        logDebug(`[Debug] Collection ${collection.Name}, Season ${season.Name}: ${altEpisodes.length} episodes (fallback)`);
                       } else {
                         collectionDownloadables.push(...episodes);
-                        console.log(`[Debug] Collection ${collection.Name}, Season ${season.Name}: ${episodes.length} episodes`);
+                        logDebug(`[Debug] Collection ${collection.Name}, Season ${season.Name}: ${episodes.length} episodes`);
                       }
                     }
 
@@ -14465,9 +14475,9 @@ animation: fadeIn 0.3s ease;
                 downloadableItems.push(...collectionDownloadables);
                 totalItemsFromCollections += collectionDownloadables.length;
                 successfulCollections++;
-                console.log(`[Debug] Collection ${collection.Name}: Added ${collectionDownloadables.length} items (running total: ${totalItemsFromCollections})`);
+                logDebug(`[Debug] Collection ${collection.Name}: Added ${collectionDownloadables.length} items (running total: ${totalItemsFromCollections})`);
               } else {
-                console.log(`[Debug] Collection ${collection.Name}: No downloadable items found`);
+                logDebug(`[Debug] Collection ${collection.Name}: No downloadable items found`);
               }
             }
 
@@ -14482,7 +14492,7 @@ animation: fadeIn 0.3s ease;
           }
         }
 
-        console.log(`[Debug] Collection expansion complete: ${totalItemsFromCollections} items from ${successfulCollections}/${boxSetItems.length} collections`);
+        logDebug(`[Debug] Collection expansion complete: ${totalItemsFromCollections} items from ${successfulCollections}/${boxSetItems.length} collections`);
 
         if (totalItemsFromCollections > 0) {
           showNotification(`Expanded ${successfulCollections} collections into ${totalItemsFromCollections} downloadable items`, 'info', 3000);
@@ -14500,14 +14510,14 @@ animation: fadeIn 0.3s ease;
         for (let i = 0; i < seriesItems.length; i++) {
           // Check if operation was cancelled
           if (abortController.signal.aborted) {
-            console.log('[Debug] TV series expansion cancelled by user');
+            logDebug('[Debug] TV series expansion cancelled by user');
             throw new Error('Operation cancelled');
           }
 
           const series = seriesItems[i];
           try {
             updateProgress(i, seriesItems.length, `Expanding ${series.Name}...`);
-            console.log(`[Debug] Expanding TV series: ${series.Name} (ID: ${series.Id})`);
+            logDebug(`[Debug] Expanding TV series: ${series.Name} (ID: ${series.Id})`);
 
             const seasons = await fetchSeasonsREST(server, token, series.Id);
             seasons.sort((a, b) => (a.IndexNumber ?? 9999) - (b.IndexNumber ?? 9999));
@@ -14517,13 +14527,13 @@ animation: fadeIn 0.3s ease;
               continue;
             }
 
-            console.log(`[Debug] Series ${series.Name}: Found ${seasons.length} seasons`);
+            logDebug(`[Debug] Series ${series.Name}: Found ${seasons.length} seasons`);
 
             // NEW v6.50: Fetch episodes in parallel if enabled
             let seriesEpisodes = [];
             if (Settings.get('enableParallelFetching') && seasons.length > 1) {
               const concurrency = Settings.get('parallelSeasonFetches') || CONFIG.parallelSeasonFetches;
-              console.log(`[Parallel] Fetching ${seasons.length} seasons with concurrency ${concurrency} for ${series.Name}`);
+              logDebug(`[Parallel] Fetching ${seasons.length} seasons with concurrency ${concurrency} for ${series.Name}`);
 
               const fetchTasks = seasons.map(season => async () => {
                 try {
@@ -14531,13 +14541,13 @@ animation: fadeIn 0.3s ease;
                   const episodes = episodeData?.Items || [];
 
                   if (!episodes.length && episodeData?.TotalRecordCount > 0) {
-                    console.log(`[Debug] Episode API returned no items but TotalRecordCount is ${episodeData.TotalRecordCount}, trying folder API fallback`);
+                    logDebug(`[Debug] Episode API returned no items but TotalRecordCount is ${episodeData.TotalRecordCount}, trying folder API fallback`);
                     const altEpisodeData = await fetchFolderItems(server, token, season.Id);
                     const altEpisodes = altEpisodeData?.Items?.filter(item => item.Type === 'Episode') || [];
-                    console.log(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${altEpisodes.length} episodes (fallback API)`);
+                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${altEpisodes.length} episodes (fallback API)`);
                     return altEpisodes;
                   } else {
-                    console.log(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${episodes.length} episodes`);
+                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${episodes.length} episodes`);
                     return episodes;
                   }
                 } catch (seasonError) {
@@ -14549,7 +14559,7 @@ animation: fadeIn 0.3s ease;
 
               const episodeArrays = await parallelFetch(fetchTasks, concurrency);
               seriesEpisodes = episodeArrays.flat();
-              console.log(`[Parallel] Completed fetching ${seriesEpisodes.length} episodes for ${series.Name}`);
+              logDebug(`[Parallel] Completed fetching ${seriesEpisodes.length} episodes for ${series.Name}`);
             } else {
               // Sequential fallback (original logic)
               for (const season of seasons) {
@@ -14558,14 +14568,14 @@ animation: fadeIn 0.3s ease;
                   const episodes = episodeData?.Items || [];
 
                   if (!episodes.length && episodeData?.TotalRecordCount > 0) {
-                    console.log(`[Debug] Episode API returned no items but TotalRecordCount is ${episodeData.TotalRecordCount}, trying folder API fallback`);
+                    logDebug(`[Debug] Episode API returned no items but TotalRecordCount is ${episodeData.TotalRecordCount}, trying folder API fallback`);
                     const altEpisodeData = await fetchFolderItems(server, token, season.Id);
                     const altEpisodes = altEpisodeData?.Items?.filter(item => item.Type === 'Episode') || [];
                     seriesEpisodes.push(...altEpisodes);
-                    console.log(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${altEpisodes.length} episodes (fallback API)`);
+                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${altEpisodes.length} episodes (fallback API)`);
                   } else {
                     seriesEpisodes.push(...episodes);
-                    console.log(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${episodes.length} episodes`);
+                    logDebug(`[Debug] Series ${series.Name}, Season ${season.IndexNumber}: ${episodes.length} episodes`);
                   }
 
                   await new Promise(resolve => setTimeout(resolve, 100));
@@ -14582,7 +14592,7 @@ animation: fadeIn 0.3s ease;
               downloadableItems.push(...seriesEpisodes);
               totalEpisodesFromSeries += seriesEpisodes.length;
               successfulSeries++;
-              console.log(`[Debug] Series ${series.Name}: Added ${seriesEpisodes.length} episodes (running total: ${totalEpisodesFromSeries})`);
+              logDebug(`[Debug] Series ${series.Name}: Added ${seriesEpisodes.length} episodes (running total: ${totalEpisodesFromSeries})`);
             }
 
             if (i < seriesItems.length - 1) {
@@ -14596,7 +14606,7 @@ animation: fadeIn 0.3s ease;
           }
         }
 
-        console.log(`[Debug] TV series expansion complete: ${totalEpisodesFromSeries} episodes from ${successfulSeries}/${seriesItems.length} series`);
+        logDebug(`[Debug] TV series expansion complete: ${totalEpisodesFromSeries} episodes from ${successfulSeries}/${seriesItems.length} series`);
 
         if (totalEpisodesFromSeries > 0) {
           showNotification(`Expanded ${successfulSeries} TV series into ${totalEpisodesFromSeries} episodes`, 'info', 3000);
@@ -14616,14 +14626,14 @@ animation: fadeIn 0.3s ease;
 
         for (let i = 0; i < artistItems.length; i++) {
           if (abortController.signal.aborted) {
-            console.log('[Debug] Artist expansion cancelled by user');
+            logDebug('[Debug] Artist expansion cancelled by user');
             throw new Error('Operation cancelled');
           }
 
           const artist = artistItems[i];
           try {
             updateProgress(i, artistItems.length, `Expanding ${artist.Name}...`);
-            console.log(`[Debug] Expanding artist ${i + 1}/${artistItems.length}: ${artist.Name} (ID: ${artist.Id})`);
+            logDebug(`[Debug] Expanding artist ${i + 1}/${artistItems.length}: ${artist.Name} (ID: ${artist.Id})`);
 
             let artistTracks = [];
 
@@ -14640,7 +14650,7 @@ animation: fadeIn 0.3s ease;
                 const trackData = await fetchWithRetry(trackUrl);
                 const tracks = (trackData.MediaContainer?.Metadata || []).map(normalizeItemPlex);
                 artistTracks.push(...tracks);
-                console.log(`[Debug] Artist ${artist.Name}, Album ${album.title}: ${tracks.length} tracks`);
+                logDebug(`[Debug] Artist ${artist.Name}, Album ${album.title}: ${tracks.length} tracks`);
 
                 await new Promise(resolve => setTimeout(resolve, 100));
               }
@@ -14660,7 +14670,7 @@ animation: fadeIn 0.3s ease;
               downloadableItems.push(...artistTracks);
               totalTracksFromArtists += artistTracks.length;
               successfulArtists++;
-              console.log(`[Debug] Artist ${artist.Name}: Added ${artistTracks.length} tracks (running total: ${totalTracksFromArtists})`);
+              logDebug(`[Debug] Artist ${artist.Name}: Added ${artistTracks.length} tracks (running total: ${totalTracksFromArtists})`);
             }
 
             if (i < artistItems.length - 1) {
@@ -14673,7 +14683,7 @@ animation: fadeIn 0.3s ease;
           }
         }
 
-        console.log(`[Debug] Artist expansion complete: ${totalTracksFromArtists} tracks from ${successfulArtists}/${artistItems.length} artists`);
+        logDebug(`[Debug] Artist expansion complete: ${totalTracksFromArtists} tracks from ${successfulArtists}/${artistItems.length} artists`);
         if (totalTracksFromArtists > 0) {
           showNotification(`Expanded ${successfulArtists} artists into ${totalTracksFromArtists} tracks`, 'info', 3000);
         }
@@ -14706,13 +14716,13 @@ animation: fadeIn 0.3s ease;
 
             downloadableItems.push(...albumTracks);
             totalTracksFromAlbums += albumTracks.length;
-            console.log(`[Debug] Album ${album.Name}: Added ${albumTracks.length} tracks`);
+            logDebug(`[Debug] Album ${album.Name}: Added ${albumTracks.length} tracks`);
           } catch (albumError) {
             console.error(`Failed to expand album ${album.Name}:`, albumError);
           }
         }
 
-        console.log(`[Debug] Album expansion complete: ${totalTracksFromAlbums} tracks from ${albumItems.length} albums`);
+        logDebug(`[Debug] Album expansion complete: ${totalTracksFromAlbums} tracks from ${albumItems.length} albums`);
       }
 
       // NEW v6.52: Process regular Folders (recursive scan)
@@ -14726,7 +14736,7 @@ animation: fadeIn 0.3s ease;
 
         for (let i = 0; i < folderItems.length; i++) {
           if (abortController.signal.aborted) {
-            console.log('[Debug] Subfolder scanning cancelled by user');
+            logDebug('[Debug] Subfolder scanning cancelled by user');
             throw new Error('Operation cancelled');
           }
 
@@ -14734,11 +14744,11 @@ animation: fadeIn 0.3s ease;
           try {
             const progressText = `Folder ${i + 1}/${folderItems.length}: ${folder.Name}`;
             updateProgress(i, folderItems.length, progressText);
-            console.log(`[Debug] Scanning subfolder ${i + 1}/${folderItems.length}: ${folder.Name} (ID: ${folder.Id})`);
+            logDebug(`[Debug] Scanning subfolder ${i + 1}/${folderItems.length}: ${folder.Name} (ID: ${folder.Id})`);
 
             // Recursively fetch items from this subfolder
             const subfolderItems = await fetchAllFolderItems(server, token, folder.Id);
-            console.log(`[Debug] Subfolder ${folder.Name}: Found ${subfolderItems.length} items`);
+            logDebug(`[Debug] Subfolder ${folder.Name}: Found ${subfolderItems.length} items`);
 
             // Filter for downloadable items
             const subfolderDownloadables = subfolderItems.filter(item => {
@@ -14754,9 +14764,9 @@ animation: fadeIn 0.3s ease;
               downloadableItems.push(...subfolderDownloadables);
               totalItemsFromFolders += subfolderDownloadables.length;
               successfulFolders++;
-              console.log(`[Debug] Subfolder ${folder.Name}: Added ${subfolderDownloadables.length} items (running total: ${totalItemsFromFolders})`);
+              logDebug(`[Debug] Subfolder ${folder.Name}: Added ${subfolderDownloadables.length} items (running total: ${totalItemsFromFolders})`);
             } else {
-              console.log(`[Debug] Subfolder ${folder.Name}: No direct downloadable items found`);
+              logDebug(`[Debug] Subfolder ${folder.Name}: No direct downloadable items found`);
             }
 
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -14768,14 +14778,14 @@ animation: fadeIn 0.3s ease;
           }
         }
 
-        console.log(`[Debug] Subfolder scanning complete: ${totalItemsFromFolders} items from ${successfulFolders}/${folderItems.length} folders`);
+        logDebug(`[Debug] Subfolder scanning complete: ${totalItemsFromFolders} items from ${successfulFolders}/${folderItems.length} folders`);
 
         if (totalItemsFromFolders > 0) {
           showNotification(`Scanned ${successfulFolders} subfolders and found ${totalItemsFromFolders} downloadable items`, 'info', 3000);
         }
       }
 
-      console.log(`[Debug] Final count: ${downloadableItems.length} total downloadable items`);
+      logDebug(`[Debug] Final count: ${downloadableItems.length} total downloadable items`);
 
       if (!downloadableItems.length) {
         const itemTypes = [...new Set(items.map(i => i.Type))].join(', ');
@@ -14899,7 +14909,7 @@ animation: fadeIn 0.3s ease;
     let items = [];
     let isWholeShow = (seasonIdFromPath === showId);
 
-    console.log(`[Debug] Processing show - ShowID: ${showId}, SeasonID: ${seasonIdFromPath}, IsWholeShow: ${isWholeShow}`);
+    logDebug(`[Debug] Processing show - ShowID: ${showId}, SeasonID: ${seasonIdFromPath}, IsWholeShow: ${isWholeShow}`);
 
     if (isWholeShow) {
       try {
@@ -14913,7 +14923,7 @@ animation: fadeIn 0.3s ease;
           throw new Error(`No seasons found for show ID: ${showId}`);
         }
 
-        console.log(`[Debug] Found ${seasons.length} seasons`);
+        logDebug(`[Debug] Found ${seasons.length} seasons`);
 
         const allEpisodes = [];
         let successfulSeasons = 0;
@@ -14924,7 +14934,7 @@ animation: fadeIn 0.3s ease;
           try {
             updateProgress(i, seasons.length, `Season ${season.IndexNumber || '?'}...`);
 
-            console.log(`[Debug] Fetching episodes for season: ${season.Name} (ID: ${season.Id}, Index: ${season.IndexNumber})`);
+            logDebug(`[Debug] Fetching episodes for season: ${season.Name} (ID: ${season.Id}, Index: ${season.IndexNumber})`);
 
             let data = await fetchEpisodesREST(server, token, showId, season.Id);
             let episodes = data?.Items || [];
@@ -14944,22 +14954,22 @@ animation: fadeIn 0.3s ease;
                 data?.apiError ? 'REST API error' :
                   `API returned TotalRecordCount=${data.TotalRecordCount} but no items`;
 
-              console.log(`[Debug] Trying Items API fallback - Reason: ${reason}`);
+              logDebug(`[Debug] Trying Items API fallback - Reason: ${reason}`);
 
               try {
                 const alternativeData = await fetchFolderItems(server, token, season.Id);
                 episodes = alternativeData?.Items?.filter(item => item.Type === 'Episode') || [];
-                console.log(`[Debug] Items API fallback returned ${episodes.length} episodes`);
+                logDebug(`[Debug] Items API fallback returned ${episodes.length} episodes`);
 
                 if (episodes.length > 0) {
-                  console.log(`[Debug] ✓ Fallback successful - got ${episodes.length} episodes from Items API`);
+                  logDebug(`[Debug] ✓ Fallback successful - got ${episodes.length} episodes from Items API`);
                 }
               } catch (altError) {
                 console.warn(`[Debug] Items API fallback also failed:`, altError.message);
               }
             }
 
-            console.log(`[Debug] Season ${season.IndexNumber} final result:`, {
+            logDebug(`[Debug] Season ${season.IndexNumber} final result:`, {
               episodeCount: episodes.length,
               apiTotalRecords: data?.TotalRecordCount,
               firstEpisode: episodes[0] ? {
@@ -14972,7 +14982,7 @@ animation: fadeIn 0.3s ease;
             if (episodes.length > 0) {
               allEpisodes.push(...episodes);
               successfulSeasons++;
-              console.log(`[Debug] Season ${season.IndexNumber}: Added ${episodes.length} episodes (total now: ${allEpisodes.length})`);
+              logDebug(`[Debug] Season ${season.IndexNumber}: Added ${episodes.length} episodes (total now: ${allEpisodes.length})`);
             } else {
               console.warn(`[Debug] Season ${season.IndexNumber}: No episodes found (API said ${data?.TotalRecordCount || 0} total records)`);
               seasonErrors.push(`Season ${season.IndexNumber}: No episodes found (API reported ${data?.TotalRecordCount || 0} total records but returned empty Items array)`);
@@ -14990,7 +15000,7 @@ animation: fadeIn 0.3s ease;
           }
         }
 
-        console.log(`[Debug] Season processing complete: ${successfulSeasons}/${seasons.length} successful, ${allEpisodes.length} total episodes`);
+        logDebug(`[Debug] Season processing complete: ${successfulSeasons}/${seasons.length} successful, ${allEpisodes.length} total episodes`);
 
         items = allEpisodes;
 
@@ -15049,12 +15059,12 @@ animation: fadeIn 0.3s ease;
 
           // If REST API failed or returned empty, try the Items API fallback
           if (!items.length && (data?.apiNotAvailable || data?.apiError)) {
-            console.log('[Debug] REST API failed, trying Items API fallback for single season...');
+            logDebug('[Debug] REST API failed, trying Items API fallback for single season...');
             try {
               const fallbackData = await fetchFolderItems(server, token, seasonIdFromPath);
               items = fallbackData?.Items?.filter(item => item.Type === 'Episode') || [];
               if (items.length > 0) {
-                console.log(`[Debug] ✓ Items API fallback successful - got ${items.length} episodes`);
+                logDebug(`[Debug] ✓ Items API fallback successful - got ${items.length} episodes`);
                 showNotification(`Found ${items.length} episodes in season`, 'info', 2000);
               }
             } catch (fallbackError) {
@@ -15089,7 +15099,7 @@ animation: fadeIn 0.3s ease;
       const titleMatch = document.querySelector('h1, .itemName, .detailPageTitle, h3.itemName');
       if (titleMatch) {
         itemInfo.Name = titleMatch.textContent.trim();
-        console.log(`[PulseGrab] API didn't provide movie name, extracted from page: ${itemInfo.Name}`);
+        logDebug(`[PulseGrab] API didn't provide movie name, extracted from page: ${itemInfo.Name}`);
       }
     }
 
@@ -15105,7 +15115,7 @@ animation: fadeIn 0.3s ease;
 
   // ---------- Main Logic ----------
   async function handleButtonClick() {
-    console.log('[PulseGrab] Button clicked'); // debug log
+    logDebug('[PulseGrab] Button clicked'); // debug log
     window._pulseGrabLargeFolderConfirmed = false; // Reset guard for new operation
 
     if (isProcessing) {
@@ -15139,7 +15149,7 @@ animation: fadeIn 0.3s ease;
             // Auto-select the only server
             server = servers[0].uri;
             capturedPlexServer = server;
-            console.log(`[PulseGrab] Auto-selected Plex server: ${servers[0].name} (${server})`);
+            logDebug(`[PulseGrab] Auto-selected Plex server: ${servers[0].name} (${server})`);
           } else {
             // Let the user pick
             const picked = await new Promise((resolve) => {
@@ -15151,7 +15161,7 @@ animation: fadeIn 0.3s ease;
             }
             server = picked.uri;
             capturedPlexServer = server;
-            console.log(`[PulseGrab] User selected Plex server: ${picked.name} (${server})`);
+            logDebug(`[PulseGrab] User selected Plex server: ${picked.name} (${server})`);
           }
         } catch (e) {
           throw new Error(`Could not discover Plex servers: ${e.message}`);
@@ -15165,12 +15175,12 @@ animation: fadeIn 0.3s ease;
       const pageType = detectPageType();
       let items = [];
 
-      console.log(`[Debug] Page type detected: ${pageType}, URL: ${window.location.href}`);
+      logDebug(`[Debug] Page type detected: ${pageType}, URL: ${window.location.href}`);
 
       const processFunction = async () => {
         // Handle server-root download
         if (pageType === 'server-root') {
-          console.log('[Debug] Detected server-root page - whole server download');
+          logDebug('[Debug] Detected server-root page - whole server download');
           currentOperation = 'server';
           return await processServerRoot(server, token);
         }
@@ -15179,7 +15189,7 @@ animation: fadeIn 0.3s ease;
         if (pageType === 'library') {
           const libraryId = getItemIdFromUrl();
           if (libraryId) {
-            console.log('[Debug] Detected library page - library download');
+            logDebug('[Debug] Detected library page - library download');
             const itemInfo = await getItemInfo(server, token, libraryId);
             currentOperation = 'library';
             return await processLibrary(server, token, libraryId, itemInfo.Name || 'Library');
@@ -15188,7 +15198,7 @@ animation: fadeIn 0.3s ease;
 
         // Search results have no parentId to walk, so query the API instead.
         if (pageType === 'search') {
-          console.log('[Debug] Detected search results page - search download');
+          logDebug('[Debug] Detected search results page - search download');
           return await processSearch(server, token);
         }
 
@@ -15199,7 +15209,7 @@ animation: fadeIn 0.3s ease;
             throw new Error("Could not detect collection ID. Please ensure you're on a collection page.");
           }
 
-          console.log(`[Debug] Processing collection with ID: ${collectionId}`);
+          logDebug(`[Debug] Processing collection with ID: ${collectionId}`);
           return await processCollection(server, token, collectionId);
 
         } else if (pageType === 'folder') {
@@ -15208,7 +15218,7 @@ animation: fadeIn 0.3s ease;
             throw new Error("Could not detect folder ID. Please ensure you're on a library or folder page.");
           }
 
-          console.log(`[Debug] Processing folder with ID: ${folderId}`);
+          logDebug(`[Debug] Processing folder with ID: ${folderId}`);
           return await processFolder(server, token, folderId);
 
         } else {
@@ -15227,32 +15237,32 @@ animation: fadeIn 0.3s ease;
             // If item info fails with 404, try alternative methods
             // Some servers (especially through Emby Connect or remote servers) don't support /Items/{id}
             if (error.message && error.message.includes('404')) {
-              console.log(`[Debug] Item ${itemId} returned 404 from Items API`);
+              logDebug(`[Debug] Item ${itemId} returned 404 from Items API`);
 
               // Try to parse IDs from page (works for TV shows/seasons)
               const ids = parseIdsFromPage();
               if (ids) {
-                console.log(`[Debug] Detected TV show/season from page, trying processShow`);
+                logDebug(`[Debug] Detected TV show/season from page, trying processShow`);
                 try {
                   return await processShow(server, token, api);
                 } catch (showError) {
-                  console.log(`[Debug] processShow failed:`, showError.message);
+                  logDebug(`[Debug] processShow failed:`, showError.message);
                 }
               }
 
               // Try as collection/boxset
-              console.log(`[Debug] Trying as collection/boxset`);
+              logDebug(`[Debug] Trying as collection/boxset`);
               try {
                 return await processCollection(server, token, itemId);
               } catch (collectionError) {
-                console.log(`[Debug] Collection processing failed:`, collectionError.message);
+                logDebug(`[Debug] Collection processing failed:`, collectionError.message);
 
                 // Try as folder
-                console.log(`[Debug] Trying as folder`);
+                logDebug(`[Debug] Trying as folder`);
                 try {
                   return await processFolder(server, token, itemId);
                 } catch (folderError) {
-                  console.log(`[Debug] Folder processing failed:`, folderError.message);
+                  logDebug(`[Debug] Folder processing failed:`, folderError.message);
 
                   // If user cancelled, don't create fallback - re-throw the error
                   if (folderError.message === 'Operation cancelled' ||
@@ -15264,7 +15274,7 @@ animation: fadeIn 0.3s ease;
 
                   // Last resort: treat as single downloadable item (movie/episode)
                   // Create a minimal item object with just the ID
-                  console.log(`[Debug] Treating as single downloadable item with ID ${itemId}`);
+                  logDebug(`[Debug] Treating as single downloadable item with ID ${itemId}`);
                   const hash = window.location.hash;
                   const titleMatch = document.querySelector('h1, .itemName, .detailPageTitle');
                   const title = titleMatch ? titleMatch.textContent.trim() : `Item ${itemId}`;
@@ -15304,13 +15314,13 @@ animation: fadeIn 0.3s ease;
             );
           }
 
-          console.log(`[Debug] Item info for ID ${itemId}:`, itemInfo);
-          console.log(`[Debug] Item Type: ${itemInfo.Type}, Name: ${itemInfo.Name}`);
+          logDebug(`[Debug] Item info for ID ${itemId}:`, itemInfo);
+          logDebug(`[Debug] Item Type: ${itemInfo.Type}, Name: ${itemInfo.Name}`);
 
           // Route based on explicit Type field from API
           switch (itemInfo.Type) {
             case "Movie":
-              console.log(`[Debug] Processing as single movie`);
+              logDebug(`[Debug] Processing as single movie`);
               return await processMovie(server, token, itemInfo);
 
             case "Episode":
@@ -15322,7 +15332,7 @@ animation: fadeIn 0.3s ease;
                 const titleMatch = document.querySelector('h1, .itemName, .detailPageTitle, h3.itemName');
                 if (titleMatch) {
                   itemInfo.Name = titleMatch.textContent.trim();
-                  console.log(`[PulseGrab] API didn't provide ${itemInfo.Type} name, extracted from page: ${itemInfo.Name}`);
+                  logDebug(`[PulseGrab] API didn't provide ${itemInfo.Type} name, extracted from page: ${itemInfo.Name}`);
                 }
               }
               // Failsafe: If still no name, use filename or ID
@@ -15331,26 +15341,26 @@ animation: fadeIn 0.3s ease;
                 console.warn(`[PulseGrab] Could not find ${itemInfo.Type} name. Using fallback: ${itemInfo.Name}`);
               }
 
-              console.log(`[Debug] Processing as single ${itemInfo.Type}: ${itemInfo.Name}`);
+              logDebug(`[Debug] Processing as single ${itemInfo.Type}: ${itemInfo.Name}`);
               currentOperation = itemInfo.Type.toLowerCase();
               showNotification(`Found ${itemInfo.Type}: ${itemInfo.Name}`, 'info', 2000);
               return [itemInfo];
 
             case "Series":
             case "Season":
-              console.log(`[Debug] Processing as TV ${itemInfo.Type}: ${itemInfo.Name}`);
+              logDebug(`[Debug] Processing as TV ${itemInfo.Type}: ${itemInfo.Name}`);
               updateProgress(0, 0, "Finding Episodes...");
               return await processShow(server, token, api);
 
             case "BoxSet":
             case "Collection":
-              console.log(`[Debug] Processing as BoxSet/Collection: ${itemInfo.Name}`);
+              logDebug(`[Debug] Processing as BoxSet/Collection: ${itemInfo.Name}`);
               return await processCollection(server, token, itemId);
 
             case "Folder":
             case "CollectionFolder":
             case "UserView":
-              console.log(`[Debug] Processing as Folder: ${itemInfo.Name}`);
+              logDebug(`[Debug] Processing as Folder: ${itemInfo.Name}`);
               return await processFolder(server, token, itemId);
 
             default:
@@ -15359,18 +15369,18 @@ animation: fadeIn 0.3s ease;
 
               // If it has children, treat as folder/collection
               if (itemInfo.IsFolder || itemInfo.ChildCount > 0) {
-                console.log(`[Debug] Item has children - treating as folder/collection`);
+                logDebug(`[Debug] Item has children - treating as folder/collection`);
 
                 // Try collection API first, fall back to folder API
                 try {
                   return await processCollection(server, token, itemId);
                 } catch (collectionError) {
-                  console.log(`[Debug] Collection processing failed, trying folder processing`);
+                  logDebug(`[Debug] Collection processing failed, trying folder processing`);
                   return await processFolder(server, token, itemId);
                 }
               } else {
                 // Treat as single downloadable item
-                console.log(`[Debug] Treating unknown type as single downloadable item`);
+                logDebug(`[Debug] Treating unknown type as single downloadable item`);
                 currentOperation = 'item';
                 showNotification(`Found item: ${itemInfo.Name}`, 'info', 2000);
                 return [itemInfo];
@@ -15403,12 +15413,6 @@ animation: fadeIn 0.3s ease;
         // Show the post-scan results dialog
         showResultsDialog(items, server, token, currentOperation, filteredCount);
 
-        // Log to console for debugging
-        const outputFormat = Settings.get('outputFormat');
-        const formatter = OutputFormatters[outputFormat];
-        const text = formatter(items, server, token);
-        const formatName = CONFIG.outputFormats[outputFormat];
-        console.info(`[PulseGrab] Operation: ${currentOperation}, Items: ${items.length}, Format: ${formatName}\n${text}`);
       } else {
         // Legacy behavior - directly copy to clipboard
         updateProgress(0, items.length, "Generating Links...");
@@ -15461,7 +15465,6 @@ animation: fadeIn 0.3s ease;
         }
 
         showNotification(successMessage, 'success');
-        console.info(`[PulseGrab] Operation: ${operationType}, Items: ${itemCount}, Format: ${formatName}\n${text}`);
       }
 
       if (abortController.signal.aborted) {
@@ -15473,7 +15476,7 @@ animation: fadeIn 0.3s ease;
         error.message === 'User cancelled folder download' ||
         error.message === 'User cancelled collection download' ||
         error.message === 'User cancelled whole show download') {
-        console.log('Operation cancelled by user');
+        logDebug('Operation cancelled by user');
         return;
       }
 
@@ -15491,18 +15494,18 @@ animation: fadeIn 0.3s ease;
   } // Closes handleButtonClick
   function applyDarkMode() {
     const darkMode = Settings.get('darkMode');
-    console.log('[PulseGrab] Dark mode setting:', darkMode);
+    logDebug('[PulseGrab] Dark mode setting:', darkMode);
 
     if (darkMode) {
       // Add dark mode class to body
       document.body.classList.add('pulsegrab-dark-mode');
-      console.log('[PulseGrab] Applied dark mode class to body');
+      logDebug('[PulseGrab] Applied dark mode class to body');
 
       // Inject dark mode styles if not already present
       if (!document.getElementById('pulsegrab-dark-mode-styles')) {
         const style = document.createElement('style');
         style.id = 'pulsegrab-dark-mode-styles';
-        console.log('[PulseGrab] Injecting dark mode CSS styles');
+        logDebug('[PulseGrab] Injecting dark mode CSS styles');
         style.textContent = `
                         /* ========== Server-Themed Dark Mode Colors ========== */
                         /* Server dark mode uses:
@@ -15832,7 +15835,7 @@ animation: fadeIn 0.3s ease;
           if (update) {
             const dismissed = GM_getValue('pulse_dismissedUpdate', '');
             if (dismissed !== update.version) {
-              console.log(`[PulseGrab] Update available: v${update.version}`);
+              logDebug(`[PulseGrab] Update available: v${update.version}`);
               UpdateChecker.showUpdateBanner();
             }
           }
