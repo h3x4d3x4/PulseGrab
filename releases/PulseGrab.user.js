@@ -401,6 +401,13 @@
         GM_setValue('pulse_dl_settings', JSON.stringify(stored));
         GM_setValue('pulse_notice_skip_reset', true);
       }
+      // Keep old history visible, but stop it from hiding anything.
+      const history = JSON.parse(GM_getValue('pulse_dl_history', '{}')) || {};
+      if (history && typeof history === 'object' && !Array.isArray(history)) {
+        let flagged = 0;
+        Object.values(history).forEach(entry => { if (entry && typeof entry === 'object') { entry.legacy = true; flagged++; } });
+        if (flagged) GM_setValue('pulse_dl_history', JSON.stringify(history));
+      }
       GM_setValue('pulse_migrated_140', true);
     }
   } catch (e) {
@@ -684,8 +691,10 @@
 
     isDownloaded(itemId) {
       if (!Settings.get('enableHistory')) return false;
-      const history = this._read();
-      return history[itemId] !== undefined;
+      const entry = this._read()[itemId];
+      // Entries from before v1.4.0 were written on every scan, so they don't
+      // prove anything was downloaded; a real download later clears the flag.
+      return entry !== undefined && !entry.legacy;
     },
 
     getDownloadDate(itemId) {
@@ -1302,8 +1311,10 @@
     }
   }
 
-  // Never overwrite: a file (or an unfinished .part) already at the path, or a
-  // path another item in this session has claimed, gets " (1)", " (2)"… added.
+  // Never overwrite: a file already at the path, or a path another item in this
+  // session has claimed, gets " (1)", " (2)"… added. A "<name>.part" nobody in
+  // this session owns is a leftover from an interrupted run and is reused.
+  // `reserved` holds lower-cased paths: macOS/Windows folders ignore case.
   async function uniquePath(rootDir, relativePath, reserved) {
     const slash = relativePath.lastIndexOf('/');
     const prefix = relativePath.slice(0, slash + 1);
@@ -1313,9 +1324,12 @@
     const ext = dot > 0 ? name.slice(dot) : '';
     for (let n = 0; n < 1000; n++) {
       const candidate = prefix + (n ? `${base} (${n})${ext}` : name);
-      if (reserved.has(candidate)) continue;
-      if (await pathExists(rootDir, candidate) || await pathExists(rootDir, `${candidate}.part`)) continue;
-      reserved.add(candidate);
+      const key = candidate.toLowerCase();
+      if (reserved.has(key)) continue;
+      if (await pathExists(rootDir, candidate)) continue;
+      // Re-check after the awaits: a concurrent download may have claimed it meanwhile.
+      if (reserved.has(key)) continue;
+      reserved.add(key);
       return candidate;
     }
     throw new Error(`Too many files named "${name}" in that folder`);
@@ -1329,23 +1343,34 @@
     } catch (e) { /* already gone */ }
   }
 
-  // "<name>.part" → "<name>". move() renames in place on Chromium; older builds
-  // without it get a copy-and-delete, which is slow for big files but correct.
+  // "<name>.part" → "<name>". move() renames in place on Chromium; if it is
+  // missing or refuses, copy-and-delete instead. A failed copy removes its own
+  // half-written target, so the complete .part is never lost either way.
   async function finishPartFile(rootDir, partPath, finalPath) {
     const partHandle = await fileHandleForPath(rootDir, partPath);
     const finalName = splitPath(finalPath).name;
     if (typeof partHandle.move === 'function') {
-      await partHandle.move(finalName);
-      return;
+      try {
+        await partHandle.move(finalName);
+        return;
+      } catch (error) {
+        logDebug('[DownloadManager] move() failed, copying instead:', error.message);
+      }
     }
-    const finalHandle = await fileHandleForPath(rootDir, finalPath);
-    const writable = await finalHandle.createWritable();
-    await writable.write(await partHandle.getFile());
-    await writable.close();
+    try {
+      const finalHandle = await fileHandleForPath(rootDir, finalPath);
+      const writable = await finalHandle.createWritable();
+      await writable.write(await partHandle.getFile());
+      await writable.close();
+    } catch (error) {
+      await removePath(rootDir, finalPath);
+      throw error;
+    }
     await removePath(rootDir, partPath);
   }
 
   async function writeBlobToDir(rootDir, relativePath, blob, reserved = new Set()) {
+    // (subtitles: tiny, written in one go, so no .part step)
     const target = await uniquePath(rootDir, relativePath, reserved);
     const handle = await fileHandleForPath(rootDir, target);
     const writable = await handle.createWritable();
@@ -6517,7 +6542,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       // Create a clean copy of the queue without memory-heavy binary chunks or raw items
       const strippedQueue = downloadQueue.map(item => {
         // Folder handles don't survive a reload, so neither do paths/bytes tied to one.
-        const { _savedChunks, _liveChunks, _closing, _partPath, _finalPath, _writtenBytes, ...rest } = item;
+        const { _savedChunks, _liveChunks, _closing, _partPath, _finalPath, _writtenBytes, _discard, ...rest } = item;
         const cleanDownloadInfo = rest.downloadInfo ? { ...rest.downloadInfo } : {};
         if (cleanDownloadInfo._rawItem) delete cleanDownloadInfo._rawItem;
 
@@ -7442,10 +7467,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
           // An active run deletes its own .part in its catch block; a paused one
           // has nobody left to do it.
           if (!wasActive) {
-            if (saveDir && item._partPath) removePath(saveDir, item._partPath);
-            if (item._finalPath) reservedPaths.delete(item._finalPath);
-            item._partPath = null;
-            item._finalPath = null;
+            discardParts([item]);
+            item._discard = false; // it stays in the queue and may be started again
           }
           item._writtenBytes = 0;
           item._savedChunks = null;
@@ -7507,6 +7530,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
             showNotification('Pause downloads before removing items', 'warning', 2500);
             break;
           }
+          discardParts([item]);
           downloadQueue.splice(index, 1);
           userAbortedIndices.clear(); // indices shifted; rebuilt as needed on next pause
           renderQueue(true);
@@ -7726,9 +7750,16 @@ Note: If blocked, right-click → Open, or run in Terminal:
           // Streamed: commit, then drop the .part suffix.
           await writable.close();
           writable = null;
-          await finishPartFile(streamDir, item._partPath, item._finalPath);
-          item._writtenBytes = 0;
+          // From here the bytes are safe on disk; nothing below may delete them.
+          const partPath = item._partPath;
           item._partPath = null;
+          item._writtenBytes = 0;
+          try {
+            await finishPartFile(streamDir, partPath, item._finalPath);
+          } catch (renameError) {
+            console.warn('[DownloadManager] Could not rename finished download:', renameError.message);
+            showNotification(`"${item.name}" finished, but couldn't be renamed — it's saved as ${splitPath(partPath).name}. Remove ".part" from the name yourself.`, 'warning', 12000);
+          }
         } else {
           saveBlob(new Blob(chunks), filename);
         }
@@ -7793,7 +7824,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
         // Streaming: a pause keeps the bytes written so far (close commits them);
         // a stop or a real error throws the partial file away.
         if (writable || (streamDir && item._partPath)) {
-          const keep = error.name === 'AbortError' && (item.status === 'paused' || !userAbortedIndices.has(index));
+          const keep = !item._discard && error.name === 'AbortError'
+            && (item.status === 'paused' || !userAbortedIndices.has(index));
           const open = writable;
           writable = null;
           item._closing = (async () => {
@@ -7807,7 +7839,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
               // Stopped, failed, or the close itself failed: the partial file
               // can't be trusted for a Range resume, so throw it away.
               if (item._partPath) await removePath(streamDir, item._partPath);
-              if (item._finalPath) reservedPaths.delete(item._finalPath);
+              if (item._finalPath) reservedPaths.delete(item._finalPath.toLowerCase());
               item._partPath = null;
               item._finalPath = null;
               item._writtenBytes = 0;
@@ -7936,6 +7968,22 @@ Note: If blocked, right-click → Open, or run in Terminal:
     let saveDirAsked = false;
     // Paths claimed by items in this session, so two downloads never share a file.
     const reservedPaths = new Set();
+
+    // Throw away the unfinished .part of items being removed or cancelled. An
+    // item still running is flagged so its own catch block deletes it instead.
+    function discardParts(items) {
+      items.forEach(item => {
+        item._discard = true;
+        const index = downloadQueue.indexOf(item);
+        if (index !== -1 && activeDownloads.has(index)) return;
+        (item._closing || Promise.resolve()).then(() => {
+          if (saveDir && item._partPath) removePath(saveDir, item._partPath);
+          if (item._finalPath) reservedPaths.delete(item._finalPath.toLowerCase());
+          item._partPath = null;
+          item._finalPath = null;
+        });
+      });
+    }
 
     // Must be called synchronously from a click: the picker needs the gesture.
     function ensureSaveDir() {
@@ -8068,6 +8116,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
       // Abort every active download. Concurrent downloads store their
       // controller in activeDownloads, so iterate the map like pause-all does —
       // otherwise the fetches keep streaming in the background.
+      // Flag every unfinished item first so the aborted runs delete their .part.
+      discardParts(downloadQueue.filter(item => item.status === 'pending' || item.status === 'paused' || item.status === 'downloading'));
       abortAllActive();
       isPaused = true;
 
@@ -8109,6 +8159,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           showNotification('A download started meanwhile — pause downloads before removing items', 'warning', 3000);
           return;
         }
+        discardParts(downloadQueue.filter(i => i.selected));
         downloadQueue = downloadQueue.filter(i => !i.selected);
         userAbortedIndices.clear(); // indices shifted
         renderQueue(true); // Queue structure changed
@@ -8225,7 +8276,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     manager.querySelector('#close-manager').addEventListener('click', async () => {
       if (isDownloading) {
-        if (await askConfirm('Close the Download Manager?', ['Downloads are in progress. Progress will be saved and you can resume later.'], 'Close anyway', 'Keep downloading')) {
+        if (await askConfirm('Close the Download Manager?', ['Downloads are in progress. The queue is kept, but unfinished files start again from the beginning when you resume.'], 'Close anyway', 'Keep downloading')) {
           isPaused = true;
           abortAllActive();
           saveState();
@@ -8239,7 +8290,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     overlay.addEventListener('click', async (e) => {
       if (e.target === overlay) {
         if (isDownloading) {
-          if (await askConfirm('Close the Download Manager?', ['Downloads are in progress. Progress will be saved and you can resume later.'], 'Close anyway', 'Keep downloading')) {
+          if (await askConfirm('Close the Download Manager?', ['Downloads are in progress. The queue is kept, but unfinished files start again from the beginning when you resume.'], 'Close anyway', 'Keep downloading')) {
             isPaused = true;
             abortAllActive();
             saveState();
@@ -8431,6 +8482,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
                 showNotification('A download started meanwhile — pause downloads before removing items', 'warning', 3000);
                 break;
               }
+              discardParts(downloadQueue.filter(i => i.selected));
               downloadQueue = downloadQueue.filter(i => !i.selected);
               userAbortedIndices.clear(); // indices shifted
               renderQueue(true); // Queue structure changed
@@ -12155,6 +12207,8 @@ animation: fadeIn 0.3s ease;
 
       logDebug(`[Library] Found ${libraryItems.length} items in ${libraryName}`);
 
+      const isVideo = file => file.MediaType === 'Video' || ['Movie', 'Episode', 'Video', 'MusicVideo'].includes(file.Type);
+
       // Process each item based on type
       for (let i = 0; i < libraryItems.length; i++) {
         if (abortController?.signal.aborted) break;
@@ -12179,7 +12233,6 @@ animation: fadeIn 0.3s ease;
         }
 
         try {
-          const isVideo = file => file.MediaType === 'Video' || ['Movie', 'Episode', 'Video', 'MusicVideo'].includes(file.Type);
           if (isDownloadableItem(item)) {
             if (!videosOnly || isVideo(item)) allItems.push(item);
           } else if (isContainerItem(item)) {
@@ -14551,7 +14604,7 @@ animation: fadeIn 0.3s ease;
       // A single movie/episode page is an explicit request for that item, so
       // filters only thin out multi-item scans.
       const scannedCount = items.length;
-      if (scannedCount > 1) {
+      if (!(pageType === 'item' && scannedCount === 1)) {
         items = ContentFilter.apply(items);
         if (Settings.get('skipDownloaded')) {
           items = items.filter(item => !DownloadHistory.isDownloaded(item.Id));
@@ -14935,7 +14988,7 @@ animation: fadeIn 0.3s ease;
       createButton();
       if (GM_getValue('pulse_notice_skip_reset', false)) {
         GM_deleteValue('pulse_notice_skip_reset');
-        showNotification('PulseGrab 1.4: "Skip previously downloaded" now really works, so it was switched off once — older history also listed things you only scanned. Turn it back on in Settings → Filters & History.', 'info', 12000);
+        showNotification('PulseGrab 1.4: "Skip previously downloaded" now really works, so it was switched off once — history from older versions listed things you only scanned, so it no longer counts. Turn it back on in Settings → Filters & History.', 'info', 12000);
       }
       setupKeyboardShortcuts();
 

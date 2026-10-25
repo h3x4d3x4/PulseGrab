@@ -265,3 +265,31 @@ test('ContentFilter: quality uses the chosen version, skips photos; size bounds'
   ]).map(i => i.Id);
   assert.deepEqual(keep, ['hd', 'photo']);
 });
+
+// ---------- uniquePath ----------
+// A fake folder whose lookups are slow, so concurrent claims really interleave.
+function fakeDir(existing = []) {
+  const files = new Set(existing);
+  const wait = () => new Promise(r => setTimeout(r, 2));
+  const dir = prefix => ({
+    async getDirectoryHandle(name) { await wait(); return dir(`${prefix}${name}/`); },
+    async getFileHandle(name) { await wait(); if (!files.has(prefix + name)) throw new Error('NotFound'); return {}; }
+  });
+  return dir('');
+}
+
+test('uniquePath: never hands the same path to two concurrent downloads', async () => {
+  const { uniquePath } = load(['splitPath', 'dirHandleFor', 'pathExists', 'uniquePath']);
+  const reserved = new Set();
+  const root = fakeDir();
+  const got = await Promise.all([1, 2, 3].map(() => uniquePath(root, 'Movies/A/A.mkv', reserved)));
+  assert.deepEqual([...got].sort(), ['Movies/A/A (1).mkv', 'Movies/A/A (2).mkv', 'Movies/A/A.mkv']);
+});
+
+test('uniquePath: skips existing files (case-insensitively), reuses a stale .part', async () => {
+  const { uniquePath } = load(['splitPath', 'dirHandleFor', 'pathExists', 'uniquePath']);
+  assert.equal(await uniquePath(fakeDir(['M/x.mkv']), 'M/x.mkv', new Set()), 'M/x (1).mkv');
+  assert.equal(await uniquePath(fakeDir(['M/x.mkv.part']), 'M/x.mkv', new Set()), 'M/x.mkv');
+  const reserved = new Set(['m/x.mkv']);
+  assert.equal(await uniquePath(fakeDir(), 'M/X.mkv', reserved), 'M/X (1).mkv');
+});
