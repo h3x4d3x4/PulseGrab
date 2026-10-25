@@ -390,6 +390,23 @@
     }
   };
 
+  // One-time (v1.4.0): history used to record every scan, not just downloads,
+  // and "Skip previously downloaded" did nothing. Now that it works, leaving it
+  // on would hide things that were only ever looked at — so switch it off once.
+  try {
+    if (!GM_getValue('pulse_migrated_140', false)) {
+      const stored = JSON.parse(GM_getValue('pulse_dl_settings', '{}')) || {};
+      if (stored.skipDownloaded === true) {
+        stored.skipDownloaded = false;
+        GM_setValue('pulse_dl_settings', JSON.stringify(stored));
+        GM_setValue('pulse_notice_skip_reset', true);
+      }
+      GM_setValue('pulse_migrated_140', true);
+    }
+  } catch (e) {
+    console.warn('v1.4.0 migration skipped:', e);
+  }
+
   // One-time cleanup of settings that no longer exist, plus leftover resume-progress keys.
   try {
     const stored = JSON.parse(GM_getValue('pulse_dl_settings', '{}'));
@@ -646,6 +663,7 @@
     mark(items) {
       if (!Settings.get('enableHistory')) return;
 
+      this._cache = null; // write from a fresh read so another tab's marks aren't lost
       const history = this._read();
       const today = new Date().toISOString().split('T')[0];
 
@@ -712,6 +730,7 @@
         if (!imported || typeof imported !== 'object' || Array.isArray(imported)) {
           throw new Error('Invalid history file format');
         }
+        this._cache = null;
         const current = this.getAll();
         const merged = { ...current, ...imported };
         this._write(merged);
@@ -853,9 +872,10 @@
         }
 
         // Quality filter (resolution). Emby/Jellyfin keep width on the video stream, not the item.
-        const width = item.Width ||
-          (primarySource(item)?.MediaStreams || []).find(s => s.Type === 'Video')?.Width;
-        if (filters.minQuality && width) {
+        // Use the version that will actually be downloaded; photos have a Width too but no "quality".
+        const isPhoto = item.Type === 'Photo' || item.MediaType === 'Photo';
+        const width = ((primarySource(item)?.MediaStreams || []).find(s => s.Type === 'Video')?.Width) || item.Width;
+        if (filters.minQuality && width && !isPhoto) {
           const minWidths = { '720p': 1280, '1080p': 1920, '4K': 3840 };
           const minWidth = minWidths[filters.minQuality];
           if (minWidth && width < minWidth) {
@@ -1260,11 +1280,78 @@
     return dir.getFileHandle(parts[parts.length - 1], { create: true });
   }
 
-  async function writeBlobToDir(rootDir, relativePath, blob) {
-    const handle = await fileHandleForPath(rootDir, relativePath);
+  function splitPath(relativePath) {
+    const parts = String(relativePath || '').split('/').filter(part => part && part !== '.' && part !== '..');
+    return { dirs: parts.slice(0, -1), name: parts[parts.length - 1] || '' };
+  }
+
+  async function dirHandleFor(rootDir, dirs, create) {
+    let dir = rootDir;
+    for (const part of dirs) dir = await dir.getDirectoryHandle(part, { create });
+    return dir;
+  }
+
+  async function pathExists(rootDir, relativePath) {
+    const { dirs, name } = splitPath(relativePath);
+    try {
+      const dir = await dirHandleFor(rootDir, dirs, false);
+      await dir.getFileHandle(name);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Never overwrite: a file (or an unfinished .part) already at the path, or a
+  // path another item in this session has claimed, gets " (1)", " (2)"… added.
+  async function uniquePath(rootDir, relativePath, reserved) {
+    const slash = relativePath.lastIndexOf('/');
+    const prefix = relativePath.slice(0, slash + 1);
+    const name = relativePath.slice(slash + 1);
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let n = 0; n < 1000; n++) {
+      const candidate = prefix + (n ? `${base} (${n})${ext}` : name);
+      if (reserved.has(candidate)) continue;
+      if (await pathExists(rootDir, candidate) || await pathExists(rootDir, `${candidate}.part`)) continue;
+      reserved.add(candidate);
+      return candidate;
+    }
+    throw new Error(`Too many files named "${name}" in that folder`);
+  }
+
+  async function removePath(rootDir, relativePath) {
+    const { dirs, name } = splitPath(relativePath);
+    try {
+      const dir = await dirHandleFor(rootDir, dirs, false);
+      await dir.removeEntry(name);
+    } catch (e) { /* already gone */ }
+  }
+
+  // "<name>.part" → "<name>". move() renames in place on Chromium; older builds
+  // without it get a copy-and-delete, which is slow for big files but correct.
+  async function finishPartFile(rootDir, partPath, finalPath) {
+    const partHandle = await fileHandleForPath(rootDir, partPath);
+    const finalName = splitPath(finalPath).name;
+    if (typeof partHandle.move === 'function') {
+      await partHandle.move(finalName);
+      return;
+    }
+    const finalHandle = await fileHandleForPath(rootDir, finalPath);
+    const writable = await finalHandle.createWritable();
+    await writable.write(await partHandle.getFile());
+    await writable.close();
+    await removePath(rootDir, partPath);
+  }
+
+  async function writeBlobToDir(rootDir, relativePath, blob, reserved = new Set()) {
+    const target = await uniquePath(rootDir, relativePath, reserved);
+    const handle = await fileHandleForPath(rootDir, target);
     const writable = await handle.createWritable();
     await writable.write(blob);
     await writable.close();
+    return target;
   }
 
   function escapeHtml(value) {
@@ -1504,9 +1591,11 @@
     filename = sanitizeFilename(filename);
     displayName = filename; // Store clean name for display
 
-    // Add file extension
-    if (item.Container && !filename.toLowerCase().endsWith(`.${item.Container.toLowerCase()}`)) {
-      filename += `.${item.Container}`;
+    // Add file extension — from the version being downloaded, which is what
+    // constructDownloadUrl() streams, not necessarily the item's default one.
+    const container = String(primarySource(item)?.Container || item.Container || '').split(',')[0].trim();
+    if (container && !filename.toLowerCase().endsWith(`.${container.toLowerCase()}`)) {
+      filename += `.${container}`;
     } else if (!filename.includes('.')) {
       if (item.MediaType === 'Video') filename += '.mkv';
       else if (item.MediaType === 'Audio') filename += '.mp3';
@@ -6427,7 +6516,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
     function saveState() {
       // Create a clean copy of the queue without memory-heavy binary chunks or raw items
       const strippedQueue = downloadQueue.map(item => {
-        const { _savedChunks, _liveChunks, ...rest } = item;
+        // Folder handles don't survive a reload, so neither do paths/bytes tied to one.
+        const { _savedChunks, _liveChunks, _closing, _partPath, _finalPath, _writtenBytes, ...rest } = item;
         const cleanDownloadInfo = rest.downloadInfo ? { ...rest.downloadInfo } : {};
         if (cleanDownloadInfo._rawItem) delete cleanDownloadInfo._rawItem;
 
@@ -7340,7 +7430,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
           // Stop and reset to pending – abort and mark so catch block keeps 'pending' status
           logDebug(`[DownloadManager] Stopping item ${index}: ${item.name}`);
           userAbortedIndices.add(index);
-          if (activeDownloads.has(index)) {
+          const wasActive = activeDownloads.has(index);
+          if (wasActive) {
             const download = activeDownloads.get(index);
             download.abortController.abort();
             activeDownloads.delete(index);
@@ -7348,6 +7439,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
           item.status = 'pending';
           item.progress = 0;
           item.error = null;
+          // An active run deletes its own .part in its catch block; a paused one
+          // has nobody left to do it.
+          if (!wasActive) {
+            if (saveDir && item._partPath) removePath(saveDir, item._partPath);
+            if (item._finalPath) reservedPaths.delete(item._finalPath);
+            item._partPath = null;
+            item._finalPath = null;
+          }
           item._writtenBytes = 0;
           item._savedChunks = null;
           item._savedReceivedLength = 0;
@@ -7449,13 +7548,18 @@ Note: If blocked, right-click → Open, or run in Terminal:
         return; // Wait for a slot to free up
       }
 
-      // Note: HTTP Range requests let us resume from where we paused.
-      // Check if we have saved chunks from a previous pause.
+      // A pause closes the previous run's file asynchronously; resuming before
+      // that finishes would seek into a file whose bytes aren't committed yet.
+      if (item._closing) {
+        await item._closing;
+        if (activeDownloads.has(index) || activeDownloads.size >= maxConcurrentDownloads || isPaused) return;
+      }
+
       // Two resume sources: bytes already written to the picked folder, or
       // chunks still held in memory from a pause on the Blob path.
       const streamDir = saveDir;
       const savedChunks = item._savedChunks || [];
-      const resumeFrom = streamDir ? (item._writtenBytes || 0) : (item._savedReceivedLength || 0);
+      const resumeFrom = streamDir ? (item._partPath ? (item._writtenBytes || 0) : 0) : (item._savedReceivedLength || 0);
       const isResume = resumeFrom > 0 && (streamDir ? true : savedChunks.length > 0);
       item._savedChunks = null;
       item._savedReceivedLength = 0;
@@ -7504,7 +7608,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
         let receivedLength = resumed ? resumeFrom : 0;
 
         if (streamDir) {
-          const handle = await fileHandleForPath(streamDir, item.downloadInfo.fullPath);
+          // Written as "<name>.part" and renamed when complete, so a media
+          // server scanning that folder never picks up a half-written file.
+          if (!item._partPath) {
+            item._finalPath = await uniquePath(streamDir, item.downloadInfo.fullPath, reservedPaths);
+            item._partPath = `${item._finalPath}.part`;
+          }
+          const handle = await fileHandleForPath(streamDir, item._partPath);
           writable = await handle.createWritable({ keepExistingData: resumed });
           if (resumed) await writable.seek(resumeFrom);
           item._writtenBytes = receivedLength;
@@ -7523,7 +7633,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
         while (true) {
           if (isPaused) {
             // Global pause-all: keep what we have for range-resume
-            if (writable) { await writable.close(); writable = null; }
+            if (writable) {
+              const closing = writable.close().catch(() => { item._writtenBytes = 0; });
+              writable = null;
+              item._closing = closing;
+              await closing;
+              item._closing = null;
+            }
             item._savedChunks = chunks.slice(); // snapshot
             item._savedReceivedLength = receivedLength;
             item._liveChunks = null;
@@ -7607,10 +7723,12 @@ Note: If blocked, right-click → Open, or run in Terminal:
         }
 
         if (writable) {
-          // Streamed: the file is already in the picked folder under its library path.
+          // Streamed: commit, then drop the .part suffix.
           await writable.close();
           writable = null;
+          await finishPartFile(streamDir, item._partPath, item._finalPath);
           item._writtenBytes = 0;
+          item._partPath = null;
         } else {
           saveBlob(new Blob(chunks), filename);
         }
@@ -7629,8 +7747,12 @@ Note: If blocked, right-click → Open, or run in Terminal:
               if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
               const subBlob = await subResp.blob();
               if (streamDir) {
-                const folder = item.downloadInfo.folderPath;
-                await writeBlobToDir(streamDir, folder ? `${folder}/${sub.filename}` : sub.filename, subBlob);
+                // Follow the video if it had to be renamed to "Name (1).mkv".
+                const videoBase = item.downloadInfo.filename.replace(/\.[^.]+$/, '');
+                const finalBase = splitPath(item._finalPath || item.downloadInfo.fullPath).name.replace(/\.[^.]+$/, '');
+                const subName = sub.filename.startsWith(videoBase) ? finalBase + sub.filename.slice(videoBase.length) : sub.filename;
+                const folder = splitPath(item._finalPath || item.downloadInfo.fullPath).dirs.join('/');
+                await writeBlobToDir(streamDir, folder ? `${folder}/${subName}` : subName, subBlob, reservedPaths);
               } else {
                 saveBlob(subBlob, sub.filename);
               }
@@ -7670,11 +7792,29 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         // Streaming: a pause keeps the bytes written so far (close commits them);
         // a stop or a real error throws the partial file away.
-        if (writable) {
+        if (writable || (streamDir && item._partPath)) {
           const keep = error.name === 'AbortError' && (item.status === 'paused' || !userAbortedIndices.has(index));
-          try { await (keep ? writable.close() : writable.abort()); } catch (e) { /* already closed */ }
-          if (!keep) item._writtenBytes = 0;
+          const open = writable;
           writable = null;
+          item._closing = (async () => {
+            let committed = false;
+            if (open) {
+              try { await (keep ? open.close() : open.abort()); committed = keep; } catch (e) { committed = false; }
+            } else {
+              committed = keep;
+            }
+            if (!committed) {
+              // Stopped, failed, or the close itself failed: the partial file
+              // can't be trusted for a Range resume, so throw it away.
+              if (item._partPath) await removePath(streamDir, item._partPath);
+              if (item._finalPath) reservedPaths.delete(item._finalPath);
+              item._partPath = null;
+              item._finalPath = null;
+              item._writtenBytes = 0;
+            }
+          })();
+          await item._closing;
+          item._closing = null;
         }
 
         if (error.name === 'AbortError') {
@@ -7794,6 +7934,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
     // session. null = buffer in memory and save through the browser instead.
     let saveDir = null;
     let saveDirAsked = false;
+    // Paths claimed by items in this session, so two downloads never share a file.
+    const reservedPaths = new Set();
 
     // Must be called synchronously from a click: the picker needs the gesture.
     function ensureSaveDir() {
@@ -7962,6 +8104,11 @@ Note: If blocked, right-click → Open, or run in Terminal:
         return;
       }
       if (await askConfirm(`Remove ${selected.length} item(s)?`, ['They will be removed from the queue.'], 'Remove', 'Keep')) {
+        // A queued download may have started while the dialog was open.
+        if (activeDownloads.size > 0) {
+          showNotification('A download started meanwhile — pause downloads before removing items', 'warning', 3000);
+          return;
+        }
         downloadQueue = downloadQueue.filter(i => !i.selected);
         userAbortedIndices.clear(); // indices shifted
         renderQueue(true); // Queue structure changed
@@ -8068,7 +8215,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
             }
           });
 
-          startNextDownload();
+          ensureSaveDir().then(() => startNextDownload());
           renderQueue();
           saveState();
           showNotification('Started downloads for group', 'info', 2000);
@@ -8280,6 +8427,10 @@ Note: If blocked, right-click → Open, or run in Terminal:
               break;
             }
             if (await askConfirm(`Remove ${selected.length} item(s)?`, ['They will be removed from the queue.'], 'Remove', 'Keep')) {
+              if (activeDownloads.size > 0) {
+                showNotification('A download started meanwhile — pause downloads before removing items', 'warning', 3000);
+                break;
+              }
               downloadQueue = downloadQueue.filter(i => !i.selected);
               userAbortedIndices.clear(); // indices shifted
               renderQueue(true); // Queue structure changed
@@ -8348,8 +8499,9 @@ Note: If blocked, right-click → Open, or run in Terminal:
       if (timeSinceUpdate < 3600000) {
         const nextIndex = downloadQueue.findIndex(i => i.status === 'pending' || i.status === 'paused');
         if (nextIndex !== -1) {
-          askConfirm('Resume previous downloads?', ['Continue the downloads that were interrupted.'], 'Resume', 'Not now').then((ok) => {
-            if (ok) setTimeout(() => downloadItem(nextIndex), 1000);
+          askConfirm('Continue interrupted downloads?', ['Some downloads were still running when the manager closed.'], 'Continue', 'Not now').then((ok) => {
+            // Called straight from the button click, so the folder picker may still open.
+            if (ok) ensureSaveDir().then(() => downloadItem(nextIndex));
           });
         }
       }
@@ -10697,7 +10849,7 @@ animation: fadeIn 0.3s ease;
                             <h4 style="margin: 0; color: ${isDarkMode ? '#60a5fa' : '#1e40af'}; font: 600 28px system-ui, sans-serif;">About PulseGrab</h4>
                           </div>
                           <p style="margin: 0 0 12px 0; color: ${isDarkMode ? '#e0e0e0' : '#1f2937'}; font: 14px system-ui, sans-serif; line-height: 1.6;">
-                          <div style="margin: 0 0 12px 0; padding: 10px 14px; border-radius: 8px; background: ${isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)'};font: 13px system-ui;"><div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="color:${isDarkMode ? '#9ca3af' : '#6b7280'};"> Detected Server</span><span style="font-weight:600;color:${getTheme().primary};">${(ServerThemes[SERVER_TYPE] || ServerThemes.emby).name}</span></div><div style="display:flex;justify-content:space-between;"><span style="color:${isDarkMode ? '#9ca3af' : '#6b7280'};"> Server Address</span><span style="font-weight:500;color:${isDarkMode ? '#e5e7eb' : '#374151'};"> ${getServerAndToken().server || 'Unknown'}</span></div></div>
+                          <div style="margin: 0 0 12px 0; padding: 10px 14px; border-radius: 8px; background: ${isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)'};font: 13px system-ui;"><div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="color:${isDarkMode ? '#9ca3af' : '#6b7280'};"> Detected Server</span><span style="font-weight:600;color:${getTheme().primary};">${(ServerThemes[SERVER_TYPE] || ServerThemes.emby).name}</span></div><div style="display:flex;justify-content:space-between;"><span style="color:${isDarkMode ? '#9ca3af' : '#6b7280'};"> Server Address</span><span style="font-weight:500;color:${isDarkMode ? '#e5e7eb' : '#374151'};"> ${escapeHtml(getServerAndToken().server || 'Unknown')}</span></div></div>
                             PulseGrab is the ultimate download manager for Emby, Plex & Jellyfin media servers. Created for the high seas community,
                             this tool provides powerful features for organizing, managing, and downloading your media library.
                           </p>
@@ -12010,8 +12162,10 @@ animation: fadeIn 0.3s ease;
         const item = libraryItems[i];
 
         // Filter by Videos Only
+        // Videos only: skip containers that can only hold audio/photos; plain
+        // folders may hold films, so those are expanded and filtered afterwards.
         if (videosOnly) {
-          const nonVideoTypes = ['Audio', 'MusicAlbum', 'MusicArtist', 'Photo', 'Book', 'Folder'];
+          const nonVideoTypes = ['Audio', 'MusicAlbum', 'MusicArtist', 'Photo', 'PhotoAlbum', 'Book'];
           if (nonVideoTypes.includes(item.Type) && item.MediaType !== 'Video') {
             continue;
           }
@@ -12025,10 +12179,12 @@ animation: fadeIn 0.3s ease;
         }
 
         try {
+          const isVideo = file => file.MediaType === 'Video' || ['Movie', 'Episode', 'Video', 'MusicVideo'].includes(file.Type);
           if (isDownloadableItem(item)) {
-            allItems.push(item);
+            if (!videosOnly || isVideo(item)) allItems.push(item);
           } else if (isContainerItem(item)) {
-            allItems.push(...await expandContainer(server, token, item, { delay: requestDelay, skipWatched }));
+            const files = await expandContainer(server, token, item, { delay: requestDelay, skipWatched });
+            allItems.push(...(videosOnly ? files.filter(isVideo) : files));
           }
 
           // Small extra delay if no specific request delay was set
@@ -13373,15 +13529,18 @@ animation: fadeIn 0.3s ease;
     const seasons = await fetchSeasonsREST(server, token, seriesId);
     seasons.sort((a, b) => (a.IndexNumber ?? 9999) - (b.IndexNumber ?? 9999));
 
+    // A request delay (whole-server scans) means "be gentle": one season at a time.
+    const throttled = opts.delay > 0;
     const tasks = seasons.map(season => async () => {
       try {
+        if (throttled) await new Promise(resolve => setTimeout(resolve, opts.delay));
         return await fetchSeasonEpisodes(server, token, seriesId, season.Id, opts);
       } catch (error) {
         console.warn(`[PulseGrab] Season ${season.IndexNumber ?? season.Name} failed:`, error.message);
         return [];
       }
     });
-    const concurrency = Settings.get('enableParallelFetching')
+    const concurrency = (!throttled && Settings.get('enableParallelFetching'))
       ? (Settings.get('parallelSeasonFetches') || CONFIG.parallelSeasonFetches) : 1;
     return (await parallelFetch(tasks, concurrency)).flat();
   }
@@ -13798,14 +13957,14 @@ animation: fadeIn 0.3s ease;
       if (!downloadableItems.length) {
         const itemTypes = [...new Set(items.map(i => i.Type))].join(', ');
         const mediaTypes = [...new Set(items.map(i => i.MediaType).filter(Boolean))].join(', ');
-        const containers = [...new Set(items.map(i => i.Container).filter(Boolean))].join(', ');
+        const formats = [...new Set(items.map(i => i.Container).filter(Boolean))].join(', ');
 
         throw new Error(
           `No downloadable media files found in this folder after expansion.\n\n` +
           `Found ${items.length} items:\n` +
           `- Types: ${itemTypes}\n` +
           `- MediaTypes: ${mediaTypes || 'none'}\n` +
-          `- Containers: ${containers || 'none'}\n` +
+          `- File formats: ${formats || 'none'}\n` +
           `- Folders: ${items.filter(i => i.IsFolder).length}\n` +
           `- Containers expanded: ${containers.length}\n\n` +
           `This might be because the items have different types than expected, or expansion failed. Check the console for detailed logs of what was processed.`
@@ -14118,6 +14277,12 @@ animation: fadeIn 0.3s ease;
     return [itemInfo];
   }
 
+  // Every "the user said no" error, so cancelling never shows up as a red error.
+  function isUserCancel(error) {
+    const message = (error && error.message) || '';
+    return message === 'Operation cancelled' || /^User cancelled\b/.test(message);
+  }
+
   // ---------- Main Logic ----------
   async function handleButtonClick() {
     logDebug('[PulseGrab] Button clicked'); // debug log
@@ -14259,10 +14424,7 @@ animation: fadeIn 0.3s ease;
                   logDebug(`[Debug] Folder processing failed:`, folderError.message);
 
                   // If user cancelled, don't create fallback - re-throw the error
-                  if (folderError.message === 'Operation cancelled' ||
-                    folderError.message === 'User cancelled folder download' ||
-                    folderError.message === 'User cancelled collection download' ||
-                    folderError.message === 'User cancelled whole show download') {
+                  if (isUserCancel(folderError)) {
                     throw folderError;
                   }
 
@@ -14386,10 +14548,14 @@ animation: fadeIn 0.3s ease;
       items = await processWithProgress(processFunction);
 
       // Apply Settings → Filters & History once, for every processor
+      // A single movie/episode page is an explicit request for that item, so
+      // filters only thin out multi-item scans.
       const scannedCount = items.length;
-      items = ContentFilter.apply(items);
-      if (Settings.get('skipDownloaded')) {
-        items = items.filter(item => !DownloadHistory.isDownloaded(item.Id));
+      if (scannedCount > 1) {
+        items = ContentFilter.apply(items);
+        if (Settings.get('skipDownloaded')) {
+          items = items.filter(item => !DownloadHistory.isDownloaded(item.Id));
+        }
       }
       const filteredCount = scannedCount - items.length;
       if (scannedCount > 0 && items.length === 0) {
@@ -14407,10 +14573,7 @@ animation: fadeIn 0.3s ease;
       }
 
     } catch (error) {
-      if (error.message === 'Operation cancelled' ||
-        error.message === 'User cancelled folder download' ||
-        error.message === 'User cancelled collection download' ||
-        error.message === 'User cancelled whole show download') {
+      if (isUserCancel(error)) {
         logDebug('Operation cancelled by user');
         return;
       }
@@ -14770,6 +14933,10 @@ animation: fadeIn 0.3s ease;
         });
       }
       createButton();
+      if (GM_getValue('pulse_notice_skip_reset', false)) {
+        GM_deleteValue('pulse_notice_skip_reset');
+        showNotification('PulseGrab 1.4: "Skip previously downloaded" now really works, so it was switched off once — older history also listed things you only scanned. Turn it back on in Settings → Filters & History.', 'info', 12000);
+      }
       setupKeyboardShortcuts();
 
       console.log(`PulseGrab v${SCRIPT_VERSION} loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!`);

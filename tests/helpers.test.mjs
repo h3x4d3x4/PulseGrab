@@ -178,7 +178,7 @@ test('isDownloadableItem / isContainerItem', () => {
   assert.ok(!d(null) && !c(null) && !d(undefined));
 });
 
-const names = ['sanitizeFilename', 'buildDownloadInfo', 'EXTRACT_SUBTITLES'];
+const names = ['sanitizeFilename', 'primarySource', 'buildDownloadInfo', 'EXTRACT_SUBTITLES'];
 const settings = {
   filenameTemplateEpisode: '{Series} - S{season}E{episode} - {Title}',
   filenameTemplateMovie: '{Title} ({Year})',
@@ -227,4 +227,41 @@ test('buildDownloadInfo: slash and colon in title never create path segments', (
   assert.equal(r.filename, 'Face_Off_ Redux (1997).mkv');
   assert.equal(r.folderPath, 'Movies/Face_Off_ Redux (1997)');
   assert.equal(r.fullPath.split('/').length, 3);
+});
+
+// ---------- primarySource / ContentFilter ----------
+const vs = (id, height, size, container = 'mkv') => ({ Id: id, Container: container, Size: size,
+  MediaStreams: [{ Type: 'Video', Height: height, Width: height * 16 / 9 }] });
+
+test('primarySource: picks the tallest version, size breaks ties, off = first', () => {
+  const on = load(['primarySource'], { settings: { preferHighestQuality: true } }).primarySource;
+  const off = load(['primarySource'], { settings: { preferHighestQuality: false } }).primarySource;
+  const item = { MediaSources: [vs('a', 1080, 5), vs('b', 2160, 9, 'mp4'), vs('c', 2160, 12)] };
+  assert.equal(on(item).Id, 'c');
+  assert.equal(off(item).Id, 'a');
+  assert.equal(on({}), undefined);
+});
+
+test('buildDownloadInfo: extension follows the chosen version', () => {
+  const r = load(names, { settings: { ...settings, preferHighestQuality: true } }).buildDownloadInfo({
+    Type: 'Movie', Name: 'Dune', ProductionYear: 2021, Container: 'mkv',
+    MediaSources: [vs('a', 1080, 5, 'mkv'), vs('b', 2160, 9, 'mp4')]
+  });
+  assert.equal(r.filename, 'Dune (2021).mp4');
+});
+
+test('ContentFilter: quality uses the chosen version, skips photos; size bounds', () => {
+  const F = load(['formatFileSize', 'primarySource', 'ContentFilter'], { settings: {
+    preferHighestQuality: true,
+    filterOptions: { minQuality: '1080p', minFileSize: null, maxFileSize: 1, excludeExtras: true }
+  } }).ContentFilter;
+  const GB = 1024 ** 3;
+  const keep = F.apply([
+    { Id: 'hd', Type: 'Movie', Size: 0.5 * GB, MediaSources: [vs('x', 720, 1), vs('y', 1080, 2)] },
+    { Id: 'sd', Type: 'Movie', Size: 0.5 * GB, MediaSources: [vs('z', 720, 1)] },
+    { Id: 'big', Type: 'Movie', Size: 2 * GB, MediaSources: [vs('w', 1080, 1)] },
+    { Id: 'photo', Type: 'Photo', Width: 800 },
+    { Id: 'trailer', Type: 'Video', ExtraType: 'Trailer', MediaSources: [vs('t', 1080, 1)] }
+  ]).map(i => i.Id);
+  assert.deepEqual(keep, ['hd', 'photo']);
 });

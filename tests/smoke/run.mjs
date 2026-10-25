@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMock, requests } from './mock-emby.mjs';
+import { startPlexMock } from './mock-plex.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = readFileSync(join(HERE, '../../releases/PulseGrab.user.js'), 'utf8');
@@ -16,7 +17,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const preamble = seed => `
 (() => {
-  const store = Object.assign({ pulse_dl_settings: JSON.stringify(Object.assign({ autoCheckUpdates: false, darkMode: false }, ${JSON.stringify(seed)})) });
+  const store = Object.assign({ pulse_dl_settings: JSON.stringify(Object.assign({ autoCheckUpdates: false, darkMode: false }, ${JSON.stringify(Object.fromEntries(Object.entries(seed).filter(([k]) => !k.startsWith('__'))))})) });
   window.GM_getValue = (k, d) => (k in store ? store[k] : d);
   window.GM_setValue = (k, v) => { store[k] = v; };
   window.GM_deleteValue = k => { delete store[k]; };
@@ -24,12 +25,16 @@ const preamble = seed => `
   window.GM_setClipboard = t => { window.__clipboard = t; };
   window.GM_info = { script: { version: '9.9.9' } };
   window.unsafeWindow = window;
+  // Stand-in for the folder picker: the origin-private file system has the same
+  // FileSystemDirectoryHandle API, so the real streaming path runs unchanged.
+  if (${JSON.stringify(!!seed.__opfs)}) window.showDirectoryPicker = () => navigator.storage.getDirectory();
   window.GM_xmlhttpRequest = o => {
     fetch(o.url, { method: o.method || 'GET', headers: o.headers, body: o.data })
       .then(async r => o.onload && o.onload({ status: r.status, statusText: r.statusText, responseText: await r.text() }))
       .catch(e => o.onerror && o.onerror({ error: String(e) }));
   };
-  window.ApiClient = {
+  if (location.port === '32400') { localStorage.setItem('myPlexAccessToken', 'PLEXTOKEN'); }
+  else window.ApiClient = {
     serverAddress: () => location.origin, accessToken: () => 'TESTTOKEN', getCurrentUserId: () => 'u1',
     getEpisodes: () => Promise.reject(new Error('use REST'))
   };
@@ -51,19 +56,19 @@ const waitFor = async (expr, timeout = 15000, label = expr) => {
 };
 
 let scriptId = null, run = 0;
-async function open(hash, seed = {}) {
+async function open(hash, seed = {}, base = `http://127.0.0.1:${PORT}/web/index.html`) {
   if (scriptId) await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: scriptId });
   scriptId = (await send('Page.addScriptToEvaluateOnNewDocument', { source: preamble(seed) + '\n' + SCRIPT })).identifier;
   // Real Emby URLs carry no query string before the hash, so reload via about:blank instead.
   await send('Page.navigate', { url: 'about:blank' }); run++;
   await sleep(100);
-  await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/web/index.html${hash}` });
+  await send('Page.navigate', { url: `${base}${hash}` });
   await waitFor(`!!document.getElementById('getDownloadLinksButton')`, 20000, 'floating button');
 }
 const bodyText = `document.body.innerText`;
 
-async function scan(hash, seed) {
-  await open(hash, seed);
+async function scan(hash, seed, base) {
+  await open(hash, seed, base);
   await evaluate(`document.getElementById('getDownloadLinksButton').click()`);
   const end = Date.now() + 30000;
   while (Date.now() < end) {
@@ -92,6 +97,7 @@ async function check(name, fn) {
 const expectEq = (actual, expected, what) => { if (actual !== expected) throw new Error(`${what}: expected ${expected}, got ${actual}`); };
 
 const mock = await startMock(PORT);
+const plex = await startPlexMock(32400);
 const profile = mkdtempSync(join(tmpdir(), 'pg-smoke-'));
 const downloads = mkdtempSync(join(tmpdir(), 'pg-dl-'));
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`,
@@ -154,6 +160,54 @@ try {
     if (!files.some(f => /^Show One - S01E01 - Episode 1\.mkv$/.test(f))) throw new Error(`unexpected names: ${files.join(', ')}`);
   });
 
+  await check('download manager: streams into a folder, never overwrites, no .part left', async () => {
+    await scan('#!/item?id=series1', { __opfs: true });
+    // An existing file at the first episode's path must survive untouched.
+    await evaluate(`(async () => {
+      const root = await navigator.storage.getDirectory();
+      for await (const [name] of root.entries()) await root.removeEntry(name, { recursive: true });
+      let d = root;
+      for (const p of ['TV Shows', 'Show One', 'Season 1']) d = await d.getDirectoryHandle(p, { create: true });
+      const w = await (await d.getFileHandle('Show One - S01E01 - Episode 1.mkv', { create: true })).createWritable();
+      await w.write('old'); await w.close();
+    })()`);
+    await evaluate(`document.getElementById('download-manager').click()`);
+    await waitFor(`!!document.getElementById('start-all')`, 5000, 'manager');
+    await evaluate(`document.getElementById('start-all').click()`);
+    await waitFor(`/6 done/.test(document.getElementById('completed-count')?.textContent || '')`, 30000, '6 done');
+    const files = await evaluate(`(async () => {
+      const out = {};
+      const walk = async (dir, prefix) => {
+        for await (const [name, h] of dir.entries()) {
+          if (h.kind === 'directory') await walk(h, prefix + name + '/');
+          else out[prefix + name] = (await h.getFile()).size;
+        }
+      };
+      await walk(await navigator.storage.getDirectory(), '');
+      return out;
+    })()`);
+    const names = Object.keys(files);
+    const s1 = 'TV Shows/Show One/Season 1/';
+    expectEq(files[s1 + 'Show One - S01E01 - Episode 1.mkv'], 3, 'pre-existing file size (must be untouched)');
+    expectEq(files[s1 + 'Show One - S01E01 - Episode 1 (1).mkv'], 51200, 'renamed new copy');
+    expectEq(names.filter(n => n.endsWith('.part')).length, 0, 'leftover .part files');
+    expectEq(names.filter(n => files[n] === 51200).length, 6, 'streamed files');
+  });
+
+  const PLEX = 'http://127.0.0.1:32400/web/index.html';
+  await check('plex: search expands the show and completes the movie', async () => {
+    const r = await scan('#!/search?pivot=top&query=plex', {}, PLEX);
+    expectEq(r.count, 4, 'items (3 episodes + 1 movie)');
+    await evaluate(`document.getElementById('copy-clipboard').click()`);
+    await waitFor(`(window.__clipboard || '').includes('/library/parts/200/')`, 5000, 'movie link via refetched Part');
+  });
+  await check('plex: movies tab only returns movies', async () => {
+    expectEq((await scan('#!/search?pivot=movie&query=plex', {}, PLEX)).count, 1, 'movies');
+  });
+  await check('plex: show page', async () => {
+    expectEq((await scan('#!/server/abc/details?key=%2Flibrary%2Fmetadata%2F100', {}, PLEX)).count, 3, 'episodes');
+  });
+
   await check('settings: every section renders and saves', async () => {
     await open('#!/item?id=m1');
     await evaluate(`document.getElementById('pulseDlSettings').click()`);
@@ -179,7 +233,7 @@ try {
     if (!(await evaluate(`document.querySelectorAll('img[src="x"]').length === 0`))) throw new Error('hostile <img> was inserted into the DOM');
   });
 } finally {
-  ws?.close(); chrome.kill('SIGKILL'); mock.close();
+  ws?.close(); chrome.kill('SIGKILL'); mock.close(); plex.close();
   rmSync(profile, { recursive: true, force: true }); rmSync(downloads, { recursive: true, force: true });
 }
 
