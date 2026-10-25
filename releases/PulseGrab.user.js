@@ -11198,10 +11198,21 @@ animation: fadeIn 0.3s ease;
   }
 
   function exportConfiguration() {
+    const settings = { ...Settings.getAll() };
+    delete settings.destLibrariesCache; // re-derivable
+    // Passwords and API keys stay out of the file unless the user asks for them.
+    const includeSecrets = confirm(
+      'Include passwords and API keys in the exported file?\n\nOnly do this for your own backup. ' +
+      'Press Cancel to export without them.'
+    );
+    if (!includeSecrets) {
+      ['destApiKey', 'remoteSecret', 'myjdLoginSecret', 'myjdDeviceSecret'].forEach(key => delete settings[key]);
+    }
+
     const config = {
-      version: '5.0',
+      version: SCRIPT_VERSION,
       exported: new Date().toISOString(),
-      settings: Settings.getAll(),
+      settings,
       history: DownloadHistory.getAll()
     };
 
