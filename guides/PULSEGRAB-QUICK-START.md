@@ -109,7 +109,7 @@ PulseGrab automatically checks for updates on each load. You can configure this 
 ### Downloads failing?
 - Try enabling **Debug Logging** in Settings to see detailed console output
 - Check that your server allows direct file access
-- For restricted servers, PulseGrab's bypass mode auto-activates when needed
+- For servers that restrict downloads, PulseGrab always builds links from the DirectPlay stream URL (no setting needed); if they still fail, the item may be blocked for your account
 
 ---
 

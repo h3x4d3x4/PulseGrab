@@ -8523,9 +8523,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           <p style="margin: 0; font: 13px/1.5 system-ui, sans-serif; color: ${isDarkMode ? '#fecaca' : '#991b1b'};">
             PulseGrab can attempt to circumvent this restriction by forcing "Direct Play" and regenerating the internal stream URLs to access the original file. 
             <br><br>
-            <strong>Disclaimer:</strong> Bypassing constraints set by the server administrator may violate their terms of service. You are solely responsible for ensuring you have permission to download this content. For this reason, this feature is disabled by default.
-            <br><br>
-            If you enable this, you can turn it off anytime from the PulseGrab Settings gear icon under <strong>"Unlock / Bypass Options"</strong>.
+            <strong>Disclaimer:</strong> Bypassing constraints set by the server administrator may violate their terms of service. You are solely responsible for ensuring you have permission to download this content.
           </p>
         </div>
         
@@ -8557,7 +8555,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       dialog.querySelector('#modal-cancel').addEventListener('click', () => {
         overlay.remove();
         window.bypassModalShown = false; // Allow it to show again if more access-denied errors occur
-        showNotification('Downloads paused. Enable Bypass Mode in Settings → Bypass Options to retry.', 'info', 6000);
+        showNotification('Downloads paused.', 'info', 6000);
       });
 
       dialog.querySelector('#modal-enable').addEventListener('click', () => {
@@ -11571,9 +11569,9 @@ animation: fadeIn 0.3s ease;
                               <svg class="wiki-icon wiki-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
                             </summary>
                             <div class="wiki-content">
-                              <p style="margin-top:0;">If the server administrator has disabled the "Allow media download" permission, PulseGrab natively bypasses this constraint by reconstructing the stream URLs used for DirectPlay.</p>
+                              <p style="margin-top:0;">If the server administrator has disabled the "Allow media download" permission, PulseGrab works around it by requesting the original file through the server's DirectPlay stream URL instead of the download endpoint.</p>
                               <ul>
-                                <li><strong>Strict Bypass:</strong> This feature is permanently enabled under the hood. It ensures you receive the pristine original file without forced transcoding.</li>
+                                <li><strong>Always on:</strong> There is no setting for this; every download link PulseGrab builds uses the DirectPlay stream URL (static, no transcoding), so you receive the pristine original file.</li>
                                 <li><strong>Original Filenames:</strong> Bypassing the native download endpoint guarantees that JDownloader and scripts grab the actual media filename rather than a generic stream ID.</li>
                               </ul>
                               <p style="margin-bottom: 0; color: ${isDarkMode ? '#fbbf24' : '#b45309'};"><strong>Disclaimer:</strong> Bypassing constraints set by the server administrator may violate their terms of service. You are solely responsible for ensuring you have permission to download this content.</p>

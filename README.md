@@ -213,7 +213,7 @@ The built-in browser downloader provides a complete download experience:
 - **Overall ETA** — live estimate shown in the status bar during downloads
 
 ### Smart Features
-- **Bypass Mode** — Strict DirectPlay bypass for servers that restrict direct downloads
+- **Download-restriction bypass (always on)** — links use the server's DirectPlay stream URL instead of the download endpoint, so they work even where the admin disabled "Allow media download". There is no setting for it. Bypassing admin restrictions may violate the server's terms of service; you are solely responsible for having permission to download the content.
 - **Download History** — local tracking with export; optionally skip already-downloaded files
 - **Selective Download** — checkbox any item or group, then download only the selected items
 - **Smart Grouping** — TV Shows grouped by season, Music by artist/album, Movies together
