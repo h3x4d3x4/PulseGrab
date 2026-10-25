@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.2.0-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,13 +16,20 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.2.0**
+## Current Version: **v1.3.0**
 
 **Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
 ---
 
 ## Changelog
+
+### v1.3.0
+**Server-to-server transfers and search results.**
+
+* **Send to My Server** — hand the download list to aria2 or My.JDownloader on your NAS; the files never pass through your browser and keep transferring after you close the tab.
+* **Search results are downloadable** — grab every match at once, scoped to the active tab (Movies, Shows, Episodes or All). Series are expanded by parent, so a show search collects every episode.
+* Fixes: series expansion on Emby returned seasons instead of episodes; Jellyfin search views are detected; Plex search says "not supported yet" instead of failing oddly.
 
 ### v1.2.0
 **Guided setup, and a destination picker that knows your libraries.**

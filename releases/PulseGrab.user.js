@@ -2608,7 +2608,7 @@
     if (dest.type === 'plex') {
       query.set('X-Plex-Token', dest.token);
     } else if (dest.type === 'jellyfin') {
-      headers.Authorization = `MediaBrowser Client="PulseGrab", Device="Browser", DeviceId="PulseGrab", Version="1.2.0", Token="${dest.token}"`;
+      headers.Authorization = `MediaBrowser Client="PulseGrab", Device="Browser", DeviceId="PulseGrab", Version="${SCRIPT_VERSION}", Token="${dest.token}"`;
     } else {
       query.set('api_key', dest.token);
     }
