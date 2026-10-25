@@ -264,6 +264,7 @@
       buttonPosition: 'bottom-right',
       outputFormat: 'links',
       autoConfirm: false,
+      preferHighestQuality: true, // multi-version items: pick the tallest video instead of the first
       showProgress: true,
       theme: 'auto',
       darkMode: 'auto', // 'auto' follows the OS live; true/false force it
@@ -853,7 +854,7 @@
 
         // Quality filter (resolution). Emby/Jellyfin keep width on the video stream, not the item.
         const width = item.Width ||
-          (item.MediaSources?.[0]?.MediaStreams || []).find(s => s.Type === 'Video')?.Width;
+          (primarySource(item)?.MediaStreams || []).find(s => s.Type === 'Video')?.Width;
         if (filters.minQuality && width) {
           const minWidths = { '720p': 1280, '1080p': 1920, '4K': 3840 };
           const minWidth = minWidths[filters.minQuality];
@@ -960,6 +961,18 @@
     return serverTheme;
   }
 
+  // The one place that decides which version of a multi-version item we use.
+  // Works on Emby/Jellyfin items (MediaSources) and raw Plex items (Media).
+  function primarySource(item) {
+    const list = item?.MediaSources || item?.Media || [];
+    if (!list.length || !Settings.get('preferHighestQuality')) return list[0];
+    const height = (m) => m.Height ?? m.height ??
+      Math.max(0, ...(m.MediaStreams || []).filter(v => v.Type === 'Video').map(v => v.Height || 0));
+    const size = (m) => m.Size ?? m.Part?.[0]?.size ?? 0;
+    return list.reduce((best, m) =>
+      (height(m) > height(best) || (height(m) === height(best) && size(m) > size(best))) ? m : best);
+  }
+
   // ---------- Plex Item Normalization ----------
   function normalizeItemPlex(plexItem) {
     const typeMap = {
@@ -969,7 +982,7 @@
       'clip': 'Video', 'playlist': 'Playlist', 'photo': 'Photo'
     };
 
-    const media = plexItem.Media?.[0];
+    const media = primarySource(plexItem);
     const part = media?.Part?.[0];
 
     return {
@@ -1376,7 +1389,7 @@
     const isAudio = item.MediaType === 'Audio' || item.Type === 'Audio';
     const isOtherMedia = !isAudio && item.MediaType && item.MediaType !== 'Video';
     if (!isOtherMedia && item.MediaSources && item.MediaSources.length > 0) {
-      const source = item.MediaSources[0];
+      const source = primarySource(item);
       const container = (source.Container || item.Container || 'mkv').toLowerCase();
       const tagParam = source.ETag ? `&Tag=${source.ETag}` : '';
 
@@ -1400,7 +1413,7 @@
     // --- Helper to get Resolution/Codec ---
     const getMediaInfo = (item) => {
       if (!item.MediaSources || !item.MediaSources.length) return { resolution: '', codec: '' };
-      const source = item.MediaSources[0];
+      const source = primarySource(item);
       const stream = source.MediaStreams ? source.MediaStreams.find(s => s.Type === 'Video') : null;
 
       let res = '';
@@ -1550,7 +1563,7 @@
     if (!Settings.get('dlExternalSubtitles')) return [];
     if (!item.MediaSources || !item.MediaSources.length) return [];
 
-    const source = item.MediaSources[0];
+    const source = primarySource(item);
     if (!source.MediaStreams) return [];
 
     const preferredLangs = (Settings.get('subtitleLanguages') || '')
@@ -8786,7 +8799,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     items.forEach(item => {
       // Check various possible size properties in server API responses
-      const size = item.Size || item.FileSize || item.MediaSources?.[0]?.Size || item.RunTimeTicks || 0;
+      const size = item.Size || item.FileSize || primarySource(item)?.Size || item.RunTimeTicks || 0;
       if (size > 0) {
         // If RunTimeTicks, convert to approximate file size (very rough estimate)
         if (item.RunTimeTicks && !item.Size && !item.FileSize) {
@@ -9092,6 +9105,19 @@ animation: fadeIn 0.3s ease;
                 </div>
               </div>
               
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-title">Prefer the highest quality version</div>
+                  <div class="setting-desc">When a movie or episode exists in several versions (say 4K and 1080p), use the one with the tallest picture. Off uses the first version the server lists.</div>
+                </div>
+                <div class="setting-control">
+                  <label class="custom-toggle">
+                    <input type="checkbox" id="prefer-highest-quality" ${currentSettings.preferHighestQuality !== false ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Don't ask before big scans</div>
@@ -10379,6 +10405,7 @@ animation: fadeIn 0.3s ease;
           const darkMode = darkModeChoice === 'dark' ? true : darkModeChoice === 'light' ? false : 'auto';
           const showProgress = settingsPanel.querySelector('#show-progress').checked;
           const autoConfirm = settingsPanel.querySelector('#auto-confirm').checked;
+          const preferHighestQuality = settingsPanel.querySelector('#prefer-highest-quality').checked;
           const jdownloaderEnabled = settingsPanel.querySelector('#jdownloader-enabled').checked;
           const jdownloaderHost = (settingsPanel.querySelector('#jdownloader-host')?.value || '').trim();
           const jdownloaderPort = parseInt(settingsPanel.querySelector('#jdownloader-port').value);
@@ -10405,6 +10432,7 @@ animation: fadeIn 0.3s ease;
           Settings.set('darkMode', darkMode);
           Settings.set('showProgress', showProgress);
           Settings.set('autoConfirm', autoConfirm);
+          Settings.set('preferHighestQuality', preferHighestQuality);
           Settings.set('jdownloaderEnabled', jdownloaderEnabled);
           Settings.set('jdownloaderHost', jdownloaderHost);
           Settings.set('jdownloaderPort', Math.max(1, Math.min(65535, jdownloaderPort || CONFIG.jdownloader.defaultPort)));
