@@ -1357,6 +1357,8 @@
         logDebug('[DownloadManager] move() failed, copying instead:', error.message);
       }
     }
+    // Something appeared at the final name meanwhile: leave it alone, keep the .part.
+    if (await pathExists(rootDir, finalPath)) throw new Error(`${finalName} already exists`);
     try {
       const finalHandle = await fileHandleForPath(rootDir, finalPath);
       const writable = await finalHandle.createWritable();
@@ -7976,12 +7978,15 @@ Note: If blocked, right-click → Open, or run in Terminal:
         item._discard = true;
         const index = downloadQueue.indexOf(item);
         if (index !== -1 && activeDownloads.has(index)) return;
-        (item._closing || Promise.resolve()).then(() => {
-          if (saveDir && item._partPath) removePath(saveDir, item._partPath);
+        // Stored as _closing so an immediate restart waits for the delete.
+        const cleanup = (item._closing || Promise.resolve()).then(async () => {
+          if (saveDir && item._partPath) await removePath(saveDir, item._partPath);
           if (item._finalPath) reservedPaths.delete(item._finalPath.toLowerCase());
           item._partPath = null;
           item._finalPath = null;
+          if (item._closing === cleanup) item._closing = null;
         });
+        item._closing = cleanup;
       });
     }
 
