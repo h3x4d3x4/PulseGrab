@@ -8999,7 +8999,7 @@ animation: fadeIn 0.3s ease;
           
           <div class="setting-nav-item active" data-target="panel-general">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            General Basics
+            General
           </div>
           <div class="setting-nav-item" data-target="panel-appearance">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
@@ -9034,7 +9034,7 @@ animation: fadeIn 0.3s ease;
           <div id="panel-general" class="settings-panel-section" style="display: block;">
             <h2 class="settings-section-title">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-              General Basics
+              General
             </h2>
             
             <div class="settings-card">
@@ -9056,7 +9056,7 @@ animation: fadeIn 0.3s ease;
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Default Output Format</div>
-                  <div class="setting-desc">The format URLs and scripts are natively generated in.</div>
+                  <div class="setting-desc">How links are shown and copied by default (plain list, wget script, JDownloader file and so on).</div>
                 </div>
                 <div class="setting-control" style="max-width: 200px;">
                   <select id="output-format" class="modern-input">
@@ -9072,7 +9072,7 @@ animation: fadeIn 0.3s ease;
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Concurrent Active Downloads</div>
-                  <div class="setting-desc">Recommended 2-3 to prevent browser network saturation.</div>
+                  <div class="setting-desc">How many files the Download Manager fetches at once. 2 or 3 is a good number; more can slow your connection or your server.</div>
                 </div>
                 <div class="setting-control" style="max-width: 120px;">
                   <input type="number" id="concurrent-downloads" class="modern-input" value="${escapeHtml(currentSettings.concurrentDownloads || 3)}" min="1" max="5">
@@ -9081,8 +9081,8 @@ animation: fadeIn 0.3s ease;
               
               <div class="setting-row">
                 <div class="setting-info">
-                  <div class="setting-title">Skip Large Batch Confirmations</div>
-                  <div class="setting-desc">Never prompt for permission on giant folder downloads.</div>
+                  <div class="setting-title">Don't ask before big scans</div>
+                  <div class="setting-desc">Start big folder and library scans without asking first.</div>
                 </div>
                 <div class="setting-control">
                   <label class="custom-toggle">
@@ -9095,7 +9095,7 @@ animation: fadeIn 0.3s ease;
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Show Fetch Progress Dialog</div>
-                  <div class="setting-desc">Disabling this speeds up background polling natively.</div>
+                  <div class="setting-desc">Shows a progress window while PulseGrab scans.</div>
                 </div>
                 <div class="setting-control">
                   <label class="custom-toggle">
@@ -9108,7 +9108,7 @@ animation: fadeIn 0.3s ease;
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Verbose Debug Logging</div>
-                  <div class="setting-desc">Print detailed network activity to browser console (F12).</div>
+                  <div class="setting-desc">Writes detailed activity to the browser console (F12). Tokens and passwords are masked.</div>
                 </div>
                 <div class="setting-control">
                   <label class="custom-toggle">
@@ -9195,9 +9195,9 @@ animation: fadeIn 0.3s ease;
               </div>
               
               <div class="setting-row" style="flex-wrap: wrap; justify-content: flex-start; gap: 12px; border-bottom: none;">
-                <button id="view-history" style="padding: 10px 16px; border: 1px solid ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 8px; background: transparent; color: ${isDarkMode ? '#e0e0e0' : '#1e293b'}; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">View SQLite History</button>
-                <button id="export-history" style="padding: 10px 16px; border: 1px solid ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 8px; background: transparent; color: ${isDarkMode ? '#e0e0e0' : '#1e293b'}; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">Export CSV Data</button>
-                <button id="clear-history" style="padding: 10px 16px; border: 1px solid #ef4444; border-radius: 8px; background: transparent; color: #ef4444; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">Nuke History DB</button>
+                <button id="view-history" style="padding: 10px 16px; border: 1px solid ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 8px; background: transparent; color: ${isDarkMode ? '#e0e0e0' : '#1e293b'}; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">View history</button>
+                <button id="export-history" style="padding: 10px 16px; border: 1px solid ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 8px; background: transparent; color: ${isDarkMode ? '#e0e0e0' : '#1e293b'}; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">Export history (JSON)</button>
+                <button id="clear-history" style="padding: 10px 16px; border: 1px solid #ef4444; border-radius: 8px; background: transparent; color: #ef4444; cursor: pointer; font: 500 13px system-ui, sans-serif; transition: all 0.2s;">Clear history</button>
               </div>
             </div>
             
@@ -9486,8 +9486,8 @@ animation: fadeIn 0.3s ease;
             <div class="settings-card">
               <div class="setting-row">
                 <div class="setting-info">
-                  <div class="setting-title">Enable JD Local Socket Binding</div>
-                  <div class="setting-desc">Injects links directly to local JDownloader 2 instance.</div>
+                  <div class="setting-title">Send to JDownloader on this computer</div>
+                  <div class="setting-desc">Adds links straight into JDownloader 2 running on this computer.</div>
                 </div>
                 <div class="setting-control">
                   <label class="custom-toggle">
@@ -9509,12 +9509,12 @@ animation: fadeIn 0.3s ease;
 
               <div class="setting-row" style="border-bottom: none;">
                 <div class="setting-info">
-                  <div class="setting-title">FlashGot Listener Port</div>
-                  <div class="setting-desc">Target TCP Port. Do not change unless manually configured in JD Advanced Settings.</div>
+                  <div class="setting-title">JDownloader port</div>
+                  <div class="setting-desc">The port JDownloader listens on. Leave it at 9666 unless you changed it in JDownloader.</div>
                 </div>
                 <div class="setting-control" style="width: 140px; display: flex; gap: 8px; flex-direction: column;">
                   <input type="number" id="jdownloader-port" class="modern-input" value="${escapeHtml(currentSettings.jdownloaderPort || 9666)}" min="1" max="65535">
-                  <button id="test-jdownloader" style="width: 100%; padding: 8px; background: transparent; border: 1px solid ${getTheme().primary}; color: ${getTheme().primary}; border-radius: 6px; cursor: pointer; font: 500 12px system-ui;">Test Net Bind</button>
+                  <button id="test-jdownloader" style="width: 100%; padding: 8px; background: transparent; border: 1px solid ${getTheme().primary}; color: ${getTheme().primary}; border-radius: 6px; cursor: pointer; font: 500 12px system-ui;">Test connection</button>
                 </div>
               </div>
             </div>
@@ -9524,9 +9524,8 @@ animation: fadeIn 0.3s ease;
               <ul style="color: ${isDarkMode ? '#9ca3af' : '#334155'}; font: 13px system-ui; margin: 0; padding-left: 20px; line-height: 1.6;">
                 <li>Open JDownloader 2 and click <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Settings</strong></li>
                 <li>Navigate down to <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Advanced Settings</strong></li>
-                <li>Search for <code style="background: ${isDarkMode ? '#334155' : '#e2e8f0'}; padding: 2px 6px; border-radius: 4px;">RemoteAPI: port</code> and verify it's 9666.</li>
-                <li>If the checkbox above is checked, we bypass HTTP CORS blocks via browser API.</li>
-                <li>PulseGrab will automatically structure folders by Movies vs Shows on execution.</li>
+                <li>Make sure the <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Remote Control / FlashGot</strong> listener is enabled on port <code style="background: ${isDarkMode ? '#334155' : '#e2e8f0'}; padding: 2px 6px; border-radius: 4px;">9666</code>.</li>
+                <li>Then turn on the switch above and press <strong style="color: ${isDarkMode ? '#e0e0e0' : 'black'}">Test connection</strong>.</li>
               </ul>
             </div>
           </div>
@@ -9541,16 +9540,16 @@ animation: fadeIn 0.3s ease;
             <div class="settings-card">
               <div class="setting-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
                 <div class="setting-info" style="width: 100%; padding: 0;">
-                  <div class="setting-title">TV Episode File Structure</div>
-                  <div class="setting-desc" style="margin-bottom: 8px;">Macro string structure when renaming TV Series files.</div>
+                  <div class="setting-title">Episode file name</div>
+                  <div class="setting-desc" style="margin-bottom: 8px;">How TV episode files are named. See the tokens below.</div>
                 </div>
                 <input type="text" id="filename-template-episode" class="modern-input" value="${escapeHtml(currentSettings.filenameTemplateEpisode || '{Series} - S{season}E{episode} - {Title}')}">
               </div>
               
               <div class="setting-row" style="flex-direction: column; align-items: stretch; gap: 8px; border-bottom: none;">
                 <div class="setting-info" style="width: 100%; padding: 0;">
-                  <div class="setting-title">Theatrical Movie Structure</div>
-                  <div class="setting-desc" style="margin-bottom: 8px;">Macro string structure when parsing Film objects.</div>
+                  <div class="setting-title">Movie file name</div>
+                  <div class="setting-desc" style="margin-bottom: 8px;">How movie files are named. See the tokens below.</div>
                 </div>
                 <input type="text" id="filename-template-movie" class="modern-input" value="${escapeHtml(currentSettings.filenameTemplateMovie || '{Title} ({Year})')}">
               </div>
@@ -9715,7 +9714,7 @@ animation: fadeIn 0.3s ease;
             </div>
 
             <div style="background: ${isDarkMode ? '#252525' : '#f8fafc'}; border: 1px dashed ${isDarkMode ? '#4b5563' : '#cbd5e1'}; border-radius: 12px; padding: 16px;">
-              <div style="color: ${isDarkMode ? '#e0e0e0' : '#334155'}; font-weight: 500; font-size: 13px; margin-bottom: 12px;">Valid Substitution Tokens:</div>
+              <div style="color: ${isDarkMode ? '#e0e0e0' : '#334155'}; font-weight: 500; font-size: 13px; margin-bottom: 12px;">Tokens you can use in the file names above:</div>
               <div style="display: flex; flex-wrap: wrap; gap: 8px;">
                 <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Series}</code>
                 <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Season}</code>
@@ -9724,6 +9723,11 @@ animation: fadeIn 0.3s ease;
                 <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Year}</code>
                 <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Resolution}</code>
                 <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Codec}</code>
+                <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{AudioCodec}</code>
+                <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Quality}</code>
+                <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Name}</code>
+                <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{ShowName}</code>
+                <code style="background: ${getTheme().primary}20; border: 1px solid ${getTheme().primary}40; color: ${isDarkMode ? '#e0e0e0' : 'black'}; padding: 4px 8px; border-radius: 6px; font-size: 13px;">{Id}</code>
               </div>
             </div>
           </div>
@@ -9732,14 +9736,14 @@ animation: fadeIn 0.3s ease;
           <div id="panel-subtitles" class="settings-panel-section" style="display: none;">
             <h2 class="settings-section-title">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-              Subtitle Extractions
+              Subtitles
             </h2>
             
             <div class="settings-card">
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">Auto-Download Local Subtitles</div>
-                  <div class="setting-desc">Spawns subsequent HTTP fetches to download independent VTT and SRT streams alongside the main file payload.</div>
+                  <div class="setting-desc">Also download external subtitle files (.srt, .ass, .vtt) next to the video.</div>
                 </div>
                 <div class="setting-control">
                   <label class="custom-toggle">
@@ -9751,8 +9755,8 @@ animation: fadeIn 0.3s ease;
               
               <div class="setting-row" style="flex-direction: column; align-items: stretch; border-bottom: none;">
                 <div class="setting-info" style="width: 100%; padding: 0; margin-bottom: 16px;">
-                  <div class="setting-title">Allowed Language Matrices</div>
-                  <div class="setting-desc">Check explicit ISO codes to whitelist them. Leaving all boxes UNCHECKED downloads EVERY available subtitle unconditionally.</div>
+                  <div class="setting-title">Subtitle languages</div>
+                  <div class="setting-desc">Tick the languages you want. If you tick none, every available subtitle is downloaded.</div>
                 </div>
                 
                 <div id="subtitle-language-container" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
@@ -9827,7 +9831,7 @@ animation: fadeIn 0.3s ease;
         </div>
         <div style="display: flex; gap: 8px;">
           <button id="reset-settings" style="padding: 8px 16px; background: transparent; border: 1px solid transparent; border-radius: 6px; color: #ef4444; cursor: pointer; font: 500 13px system-ui;">Reset Config</button>
-          <button id="save-settings" style="padding: 8px 24px; background: ${getTheme().primary}; border: none; border-radius: 6px; color: white; cursor: pointer; font: 600 13px system-ui; box-shadow: 0 4px 6px ${getTheme().primary}40;">Save Parameters & Reload</button>
+          <button id="save-settings" style="padding: 8px 24px; background: ${getTheme().primary}; border: none; border-radius: 6px; color: white; cursor: pointer; font: 600 13px system-ui; box-shadow: 0 4px 6px ${getTheme().primary}40;">Save</button>
         </div>
       </div>
     `;
