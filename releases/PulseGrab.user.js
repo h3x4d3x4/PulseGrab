@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.3.0
+// @version      1.4.0
 // @description  Download anything from your Emby, Plex, or Jellyfin server — server-to-server transfer to your own NAS, built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT

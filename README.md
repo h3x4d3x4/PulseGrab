@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,7 +16,7 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.3.0**
+## Current Version: **v1.4.0**
 
 **Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
@@ -30,7 +30,7 @@
 * **Filters actually apply.** Quality, size and "exclude extras" in Settings → Filters & History were saved but never used. They now run on every scan, and the results dialog says how many items they removed. "Skip previously downloaded" works too.
 * **History records real downloads**, not every scan.
 * **Plex search** — search results on Plex can be downloaded, scoped to the active tab, like Emby and Jellyfin.
-* **Big downloads no longer crash the tab** — on Chrome/Edge over HTTPS the Download Manager streams files straight into a folder you pick, sorted into Movies / TV Shows / Music, and resumes after a pause. Other browsers keep the old behaviour and warn before files over 2 GB.
+* **Big downloads no longer crash the tab** — on Chrome/Edge over HTTPS the Download Manager streams files straight into a folder you pick, sorted into Movies / TV Shows / Music. Files are written as `name.part` and renamed when done, a pause resumes where it stopped, and an existing file is never overwritten (the new copy becomes "Name (1)"). Other browsers keep the old behaviour and warn before files over 2 GB.
 * **Series inside collections and folders inside folders** are expanded everywhere, and Jellyfin library scans no longer fetch everything twice.
 * **Picks the best version** of items with several (4K and 1080p) — on by default, toggle in General.
 * **Music and photo links fixed** — audio uses the audio stream endpoint, photos and other files the plain download endpoint.
@@ -38,7 +38,8 @@
 * **Security:** media titles are escaped everywhere they are shown; access tokens are no longer printed to the browser console; Export Setup leaves passwords and API keys out unless you ask; the generated aria2 config no longer allows any web origin.
 * **No more background traffic** — the never-used background prefetch that scanned folders on every page load is gone.
 * Proper in-page dialogs instead of browser pop-ups, Escape closes the top dialog everywhere, screen-reader labels, plainer settings wording, an accurate Wiki, and file names without empty "()" when a film has no year.
-* About 1,200 lines of dead code removed; unit tests for the helpers and the aria2 mover script.
+* **Upgrade note:** "Skip previously downloaded" is switched off once, because older versions recorded every scan as a download. History is kept, but entries from before 1.4.0 no longer hide anything.
+* About 1,200 lines of dead code removed; unit tests for the helpers and the aria2 mover script, plus a headless browser test suite.
 
 ### v1.3.0
 **Server-to-server transfers and search results.**
