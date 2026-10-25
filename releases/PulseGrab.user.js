@@ -6332,6 +6332,15 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
       if (resume) {
         downloadQueue = downloadManagerState.queue;
+        // The saved bytes are gone (chunks aren't persisted, the folder handle dies on reload),
+        // so these items really restart from zero. Show that instead of the old percentage.
+        downloadQueue.forEach(item => {
+          if (item.status === 'paused' || item.status === 'downloading') {
+            item.progress = 0;
+            item._writtenBytes = 0;
+            item._savedReceivedLength = 0;
+          }
+        });
         logDebug('[DownloadManager] Restored previous state with', downloadQueue.length, 'items');
       } else {
         // User wants fresh start
