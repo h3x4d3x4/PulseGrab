@@ -349,9 +349,6 @@
       // NEW v6.59: Subtitle Settings
       dlExternalSubtitles: true,
       subtitleLanguages: '', // Empty = all, or comma separated 'eng,spa'
-      // NEW v6.59: Bypass Download Restrictions
-      // bypassMode: 'disabled', // 'disabled', 'directplay' (static=true), 'remux' (static=false, copy)
-      emulateClient: true,     // Mimic 'Emby Web' client
       // NEW v1.0.2: In-app update settings
       autoCheckUpdates: true,
       updateCheckInterval: 24  // hours
@@ -361,16 +358,6 @@
       try {
         let stored = GM_getValue('pulse_dl_settings', '{}');
         let settings = JSON.parse(stored);
-
-        // Legacy migrations (kept for structure, but bypassMode is always on now)
-        if (key === 'bypassMode') {
-          return 'directplay'; // Always enforce directplay
-        }
-
-        // Migration: forceDirectPlay -> bypassMode (only if bypassMode isn't explicitly set)
-        if (key === 'bypassMode' && settings.forceDirectPlay === true && settings.bypassMode === undefined) {
-          return 'directplay';
-        }
 
         return settings[key] !== undefined ? settings[key] : this.defaults[key];
       } catch {
@@ -393,19 +380,9 @@
       try {
         const stored = GM_getValue('pulse_dl_settings', '{}');
         const settings = JSON.parse(stored);
-        const allSettings = { ...this.defaults, ...settings };
-
-        // Enforce bypassMode to always be 'directplay'
-        allSettings.bypassMode = 'directplay';
-
-        // Migration: forceDirectPlay -> bypassMode (if old setting exists and new one isn't explicitly set)
-        if (settings.forceDirectPlay === true && settings.bypassMode === undefined) {
-          allSettings.bypassMode = 'directplay';
-        }
-
-        return allSettings;
+        return { ...this.defaults, ...settings };
       } catch {
-        return { ...this.defaults, bypassMode: 'directplay' }; // Ensure bypassMode is 'directplay' even on error
+        return { ...this.defaults };
       }
     }
   };
@@ -817,7 +794,6 @@
       return `${url}${paramStr ? '?' + paramStr : ''}`;
     }
   };
-
 
   // ---------- Content Filter ----------
   const ContentFilter = {
@@ -1329,8 +1305,6 @@
     }
 
     // Emby & Jellyfin: DirectPlay bypass
-    const bypassMode = 'directplay';
-    const emulateClient = Settings.get('emulateClient');
     const prefix = apiPrefix(); // '/emby' for Emby, '' for Jellyfin
 
     // Photos, books etc. have no stream endpoint; the plain Download endpoint serves the file.
@@ -1342,20 +1316,13 @@
       const container = (source.Container || item.Container || 'mkv').toLowerCase();
       const tagParam = source.ETag ? `&Tag=${source.ETag}` : '';
 
-      let clientParams = '';
-      if (emulateClient) {
-        const clientName = SERVER_TYPE === 'jellyfin' ? 'Jellyfin Web' : 'Emby Web';
-        clientParams = `&DeviceId=PulseGrab_Bypass&DeviceName=PulseGrab&Client=${clientName}`;
-      }
+      const clientName = SERVER_TYPE === 'jellyfin' ? 'Jellyfin Web' : 'Emby Web';
+      const clientParams = `&DeviceId=PulseGrab_Bypass&DeviceName=PulseGrab&Client=${clientName}`;
 
       let streamParams = `&MediaSourceId=${source.Id}${tagParam}${clientParams}&PlayMethod=DirectPlay&Copy=true&AudioCodec=copy&VideoCodec=copy`;
 
       const streamRoot = isAudio ? 'Audio' : 'Videos';
-      if (bypassMode === 'directplay') {
-        return `${server}${prefix}/${streamRoot}/${item.Id}/stream.${container}?api_key=${token}&Static=true${streamParams}`;
-      } else if (bypassMode === 'remux') {
-        return `${server}${prefix}/${streamRoot}/${item.Id}/stream.${container}?api_key=${token}&Static=false${streamParams}`;
-      }
+      return `${server}${prefix}/${streamRoot}/${item.Id}/stream.${container}?api_key=${token}&Static=true${streamParams}`;
     }
 
     return `${server}${prefix}/Items/${item.Id}/Download?api_key=${token}`;
@@ -1567,13 +1534,9 @@
 
         // Emby & Jellyfin: /Videos/{id}/{sourceId}/Subtitles/{index}/Stream.{codec}
         const prefix = apiPrefix();
-        const emulateClient = Settings.get('emulateClient');
         const tagParam = source.ETag ? `&Tag=${source.ETag}` : '';
         const clientName = SERVER_TYPE === 'jellyfin' ? 'Jellyfin Web' : 'Emby Web';
-        let clientParams = '';
-        if (emulateClient) {
-          clientParams = `&DeviceId=PulseGrab_Bypass&DeviceName=PulseGrab&Client=${clientName}`;
-        }
+        const clientParams = `&DeviceId=PulseGrab_Bypass&DeviceName=PulseGrab&Client=${clientName}`;
         const bypassParams = `${tagParam}${clientParams}&Static=true&PlayMethod=DirectPlay`;
 
         return {
@@ -5897,46 +5860,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     const jdownloaderEnabled = Settings.get('jdownloaderEnabled');
 
-    // Check for blocked downloads
-    const hasBlockedDownloads = uniqueItems.some(item => item.CanDownload === false);
-    const bypassEnabled = Settings.get('bypassMode') !== 'disabled';
-
-    // Banner for blocked downloads
-    // Banner for blocked downloads
-    const blockedBanner = (hasBlockedDownloads && !bypassEnabled) ? `
-      <div id="bypass-suggestion" style="
-        margin: 0 0 16px 0;
-        padding: 12px;
-        background: ${isDarkMode ? '#451a1a' : '#fee2e2'};
-        border: 1px solid #ef4444;
-        border-radius: 6px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      ">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          ${Icons.alert}
-          <div style="position: relative; ">
-            <span style="font-weight: 600; color: ${isDarkMode ? '#fca5a5' : '#b91c1c'}; font-size: 14px;">Downloads Restricted</span>
-            <span style="color: ${isDarkMode ? '#fecaca' : '#7f1d1d'}; font-size: 13px;">Server has disabled downloads for some items.</span>
-          </div>
-        </div>
-        <button id="enable-bypass-btn" style="
-          padding: 6px 12px;
-          background: #ef4444;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          font-weight: 500;
-          font-size: 13px;
-          cursor: pointer;
-          white-space: nowrap;
-          transition: background 0.2s;
-        ">Enable Bypass</button>
-      </div>
-    ` : '';
-
     dialog.innerHTML = `
       <!-- ── Header ── -->
       <div style="
@@ -6256,23 +6179,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
     dialog.querySelector('#wget-curl-script').addEventListener('click', () => {
       generateWgetCurlScript(uniqueItems, server, token, packageName);
     });
-
-    // Auto-bypass listener
-    const bypassBtn = dialog.querySelector('#enable-bypass-btn');
-    if (bypassBtn) {
-      bypassBtn.addEventListener('click', () => {
-        Settings.set('bypassMode', 'directplay');
-        cleanup(); // Constants like overlay usage need cleanup
-
-        // Re-open dialog with bypass enabled (this effectively refreshes it)
-        // We need to wait a tick for cleanup to process
-        setTimeout(() => {
-          showResultsDialog(items, server, token, operationType, filteredCount);
-        }, 100);
-
-        showNotification('Bypass enabled! Using direct stream links.', 'success', 4000);
-      });
-    }
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
@@ -7880,15 +7786,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
             errorMessage = 'Network error - check your connection and try again';
           } else if (error.message.includes('HTTP 401') || error.message.includes('HTTP 403')) {
             errorMessage = SERVER_TYPE === 'plex' ? 'Access denied - Plex token may be expired. Refresh the page.' : SERVER_TYPE === 'jellyfin' ? 'Access denied - refresh the Jellyfin page and try again.' : 'Access denied - check your server credentials';
-            if (Settings.get('bypassMode') === 'disabled') {
-              errorMessage += ' (Bypass Mode Required)';
-
-              // Only show the modal once per queue run to avoid spamming
-              if (!window.bypassModalShown && SERVER_TYPE !== 'plex') {
-                window.bypassModalShown = true;
-                showBypassModal();
-              }
-            }
             // Stop further downloads on auth error to prevent spamming
             isPaused = true;
             logDebug('[DownloadManager] Pausing queue due to authentication error');
@@ -8086,7 +7983,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
       currentAbortController = null;
 
       isPaused = true;
-      window.bypassModalShown = false; // Reset flag when cancelled
 
       // Remove all pending, paused, and downloading items
       const completedItems = downloadQueue.filter(item => item.status === 'completed' || item.status === 'error');
@@ -8136,121 +8032,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
       updateStats();
       saveState();
     });
-
-    // ---------- NEW v6.61: Bypass Mode Modal ----------
-    function showBypassModal() {
-      const overlay = document.createElement('div');
-      overlay.className = 'pg-overlay';
-      overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0,0,0,0.85);
-        z-index: ${Z_TOP}; /* Higher than manager */
-        display: flex;
-      align-items: center;
-      justify-content: center;
-        backdrop-filter: blur(4px);
-        animation: fadeIn 0.2s ease;
-      `;
-
-      const isDarkMode = Settings.get('darkMode');
-      const dialog = document.createElement('div');
-      dialog.style.cssText = `
-        background: ${isDarkMode ? '#1f2937' : 'white'};
-        border-radius: 12px;
-        padding: 24px;
-        max-width: 500px;
-        width: 90%;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-        position: relative;
-        
-        color: ${isDarkMode ? '#e0e0e0' : '#1f2937'};
-      `;
-
-      dialog.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
-          <div style="color: #ef4444; width: 32px; height: 32px;">
-            ${Icons.alert}
-          </div>
-          <h3 style="margin: 0; font: 600 20px system-ui, sans-serif;">Downloads Blocked by Server</h3>
-        </div>
-        
-        <p style="font: 14px/1.6 system-ui, sans-serif; margin: 0 0 16px 0;">
-          The server administrator has specifically disabled the "Allow media download" permission for your account or for these specific items.
-        </p>
-        
-        <div style="background: ${isDarkMode ? '#371c1c' : '#fef2f2'}; border-left: 4px solid #ef4444; padding: 12px; margin-bottom: 20px; border-radius: 4px;">
-          <h4 style="margin: 0 0 8px 0; font: 600 14px system-ui, sans-serif; color: ${isDarkMode ? '#fca5a5' : '#b91c1c'};">About Strict Bypass</h4>
-          <p style="margin: 0; font: 13px/1.5 system-ui, sans-serif; color: ${isDarkMode ? '#fecaca' : '#991b1b'};">
-            PulseGrab can attempt to circumvent this restriction by forcing "Direct Play" and regenerating the internal stream URLs to access the original file. 
-            <br><br>
-            <strong>Disclaimer:</strong> Bypassing constraints set by the server administrator may violate their terms of service. You are solely responsible for ensuring you have permission to download this content.
-          </p>
-        </div>
-        
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button id="modal-cancel" style="
-            padding: 10px 16px;
-            background: ${isDarkMode ? '#374151' : '#f3f4f6'};
-            color: ${isDarkMode ? '#e0e0e0' : '#374151'};
-            border: none;
-            border-radius: 6px;
-            font: 500 14px system-ui, sans-serif;
-            cursor: pointer;
-            transition: background 0.2s;
-          ">Cancel Downloads</button>
-          
-          <button id="modal-enable" style="
-            padding: 10px 16px;
-            background: #ef4444;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font: 500 14px system-ui, sans-serif;
-            cursor: pointer;
-            transition: opacity 0.2s;
-          ">Enable Strict Bypass</button>
-        </div>
-      `;
-
-      dialog.querySelector('#modal-cancel').addEventListener('click', () => {
-        overlay.remove();
-        window.bypassModalShown = false; // Allow it to show again if more access-denied errors occur
-        showNotification('Downloads paused.', 'info', 6000);
-      });
-
-      dialog.querySelector('#modal-enable').addEventListener('click', () => {
-        Settings.set('bypassMode', 'directplay');
-        overlay.remove();
-        showNotification('Strict Bypass enabled. Rebuilding links and resuming...', 'success', 4000);
-
-        // Regenerate download URLs with bypass mode on, reset access-denied errors
-        downloadQueue.forEach(item => {
-          if (item.status === 'error' || item.status === 'paused' || item.status === 'pending') {
-            // Rebuild the URL now that bypass is enabled
-            item.url = constructDownloadUrl(item.downloadInfo._rawItem || { Id: item.id }, server, token);
-            if (item.status === 'error' && item.error && item.error.includes('Access denied')) {
-              item.status = 'pending';
-              item.error = null;
-              item.progress = 0;
-            }
-          }
-        });
-
-        window.bypassModalShown = false;
-        isPaused = false;
-        isDownloading = true;
-        saveState();
-        renderQueue();
-        startNextDownload();
-      });
-
-      overlay.appendChild(dialog);
-      document.body.appendChild(overlay);
-    }
 
     toggleViewBtn.addEventListener('click', toggleView);
 
@@ -15528,9 +15309,6 @@ animation: fadeIn 0.3s ease;
       hideProgressModal();
     }
     stopJDownloaderDetection(); // Stop auto-detection when cleaning up
-    // Reset the bypass-modal guard so a stale `true` from a prior page doesn't
-    // suppress the modal forever after SPA navigation.
-    window.bypassModalShown = false;
     document.querySelectorAll('.pulse-dl-notification').forEach(n => n.remove());
     document.querySelectorAll('.pg-overlay-nav').forEach(n => n.remove());
     const settingsBtn = document.getElementById(CONFIG.settingsId);
