@@ -4,7 +4,7 @@
 
 # PulseGrab — Universal Download Manager for Emby, Plex & Jellyfin
 
-[![Version](https://img.shields.io/badge/version-1.4.0-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
+[![Version](https://img.shields.io/badge/version-1.4.1-brightgreen)](https://github.com/h3x4d3x4/PulseGrab/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Greasy Fork](https://img.shields.io/greasyfork/dt/573086?label=Greasy%20Fork&logo=greasyfork&logoColor=white)](https://greasyfork.org/en/scripts/573086-pulsegrab-universal-download-manager)
 [![GitHub Stars](https://img.shields.io/github/stars/h3x4d3x4/PulseGrab?style=flat)](https://github.com/h3x4d3x4/PulseGrab)
@@ -16,13 +16,19 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20PulseGrab-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/hexadexa)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github)](https://github.com/sponsors/h3x4d3x4)
 
-## Current Version: **v1.4.0**
+## Current Version: **v1.4.1**
 
 **Latest Release**: [PulseGrab.user.js](https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js)
 
 ---
 
 ## Changelog
+
+### v1.4.1
+**Smoother updates and a Send to My Server that never looks stuck.**
+
+* **Update panel** — Install Update shows a download progress bar, verifies the new version and hands it straight to your userscript manager via the direct link, then confirms after the reload. The version check reads just the 2 KB script header.
+* **Send to My Server status** — a status pill with each step and a running timer, also for "choose what to send"; the route check answers within 6 seconds and skips the wait when aria2's queue is full; My.JDownloader folders are sent four at a time.
 
 ### v1.4.0
 **Everything that was quietly broken now works, plus Plex search.**

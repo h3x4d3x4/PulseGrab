@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PulseGrab - Universal Download Manager
 // @namespace    https://github.com/h3x4d3x4/PulseGrab
-// @version      1.4.0
+// @version      1.4.1
 // @description  Download anything from your Emby, Plex, or Jellyfin server — server-to-server transfer to your own NAS, built-in manager, JDownloader, wget/curl, aria2, QR codes, 10+ export formats.
 // @author       Hexadexa
 // @license      MIT
@@ -547,6 +547,9 @@
       if (!latestVersion) {
         const reason = (header.reason || release.reason || {}).message || 'unknown error';
         console.warn('[PulseGrab] Update check failed:', reason);
+        // Try again in about an hour rather than on every page load.
+        const interval = (Settings.get('updateCheckInterval') || 24) * 60 * 60 * 1000;
+        GM_setValue('pulse_lastUpdateCheck', Date.now() - Math.max(0, interval - 60 * 60 * 1000));
         if (force) throw new Error(reason);
         return null;
       }
@@ -616,8 +619,7 @@
       };
 
       const openInstaller = () => {
-        GM_setValue('pulse_pendingUpdate', target);
-        const tab = window.open(UPDATE_RAW_URL, '_blank');
+        const tab = window.open(UPDATE_RAW_URL, '_blank', 'noopener');
         render(`${title(`Almost done — confirm in ${escapeHtml(manager)}`)}
           ${bar(100)}
           <div style="font-size:12px; line-height:1.5; color:${muted}; margin-bottom:10px;">
@@ -644,7 +646,9 @@
             const fill = container && container.querySelector('.pg-update-fill');
             const status = container && container.querySelector('.pg-update-status');
             if (!fill || !status) return;
-            if (event.lengthComputable && event.total > 0) {
+            // Some managers report `total` as the gzipped size but `loaded` as
+            // decoded bytes; when the numbers can't be trusted, show size only.
+            if (event.lengthComputable && event.total > 0 && event.loaded <= event.total) {
               fill.style.animation = 'none';
               fill.style.width = `${Math.min(100, (event.loaded / event.total) * 100).toFixed(0)}%`;
               status.textContent = `Downloading… ${formatFileSize(event.loaded)} of ${formatFileSize(event.total)}`;
@@ -661,8 +665,10 @@
         if (!this.isNewer(version, SCRIPT_VERSION)) {
           throw new Error(`GitHub is still serving v${version} — its cache refreshes within 5 minutes, try again shortly`);
         }
+        if (container && !container.isConnected) return; // closed while downloading
         openInstaller();
       } catch (error) {
+        if (container && !container.isConnected) return;
         render(`${title('Update failed')}
           <div style="font-size:12px; line-height:1.5; color:#ef4444; margin-bottom:10px;">${escapeHtml(error.message)}</div>
           <div style="display:flex; gap:8px;">
@@ -2313,8 +2319,7 @@
       }
 
       // Only bytes on the wire (or an outright completion) prove the route.
-      // Anything else — 'waiting' behind aria2's concurrency limit, 'active'
-      // with nothing transferred yet — keeps polling until the deadline.
+      // 'active' with nothing transferred yet keeps polling until the deadline.
       if (status.status === 'complete') return added;
       if (status.status === 'active' && Number(status.completedLength) > 0) return added;
       // Queued behind other downloads: it can't prove anything until a slot
@@ -2570,8 +2575,18 @@
     return myjdSession;
   }
 
+  // Parallel package sends can all find the session expired at once; share one
+  // reconnect instead of racing several /my/connect calls.
+  let myjdConnecting = null;
+  function myjdReconnect() {
+    if (!myjdConnecting) {
+      myjdConnecting = myjdConnect().finally(() => { myjdConnecting = null; });
+    }
+    return myjdConnecting;
+  }
+
   async function myjdEnsureSession() {
-    return myjdSession || myjdConnect();
+    return myjdSession || myjdReconnect();
   }
 
   async function myjdListDevices() {
@@ -2629,6 +2644,7 @@
         try { detail = JSON.parse(body).type || detail; } catch (e) { /* keep status */ }
         const error = new Error(detail);
         error.myjdStatus = response.status;
+        error.myjdSession = session;
         throw error;
       }
       return JSON.parse(myjdDecrypt(session.deviceToken, body));
@@ -2640,8 +2656,12 @@
       // 403 / TOKEN_INVALID means the session lapsed — re-establish once.
       if (error.myjdStatus === 403 || /token/i.test(error.message)) {
         logDebug('[MyJD] Session expired, reconnecting…');
-        myjdSession = null;
-        await myjdConnect();
+        // Drop the session only if it is still the one that failed — another
+        // parallel send may already have replaced it; then just retry.
+        if (!error.myjdSession || myjdSession === error.myjdSession) {
+          myjdSession = null;
+          await myjdReconnect();
+        }
         return run();
       }
       if (error.myjdStatus === 404) {
@@ -4862,7 +4882,10 @@ exit 0
       <span style="width:14px; height:14px; flex-shrink:0; border-radius:50%; border:2px solid ${getTheme().primary};
         border-right-color: transparent; animation: pulsegrab-spin .8s linear infinite;"></span>
       <span class="pg-ts-text" style="flex:1;"></span>
-      <span class="pg-ts-time" style="font-size:11px; color:${isDark ? '#6b7280' : '#9ca3af'};"></span>`;
+      <span class="pg-ts-time" aria-hidden="true" style="font-size:11px; color:${isDark ? '#6b7280' : '#9ca3af'};"></span>`;
+    // A transfer panel from an earlier send may already sit in this corner.
+    const panel = remoteTransferPanel && document.body.contains(remoteTransferPanel.element) ? remoteTransferPanel.element : null;
+    if (panel) el.style.bottom = `${panel.getBoundingClientRect().height + 32}px`;
     document.body.appendChild(el);
     const started = Date.now();
     const timer = setInterval(() => {
@@ -15149,7 +15172,6 @@ animation: fadeIn 0.3s ease;
       }
       createButton();
       if (justUpdatedFrom && UpdateChecker.isNewer(SCRIPT_VERSION, justUpdatedFrom)) {
-        GM_deleteValue('pulse_pendingUpdate');
         GM_setValue('pulse_lastUpdateResult', null);
         showNotification(`PulseGrab updated to v${SCRIPT_VERSION} (from v${justUpdatedFrom}).`, 'success', 6000);
         justUpdatedFrom = null;
