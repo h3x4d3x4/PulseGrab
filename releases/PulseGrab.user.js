@@ -235,10 +235,6 @@
       // Leading dot => Emby/Jellyfin/Plex skip it during library scans.
       stagingDir: '.pulsegrab-incoming'
     },
-    rateLimit: {
-      maxRequestsPerSecond: 10,
-      enabled: true
-    },
     styles: {
       position: "fixed",
       bottom: "20px",
@@ -271,12 +267,9 @@
       showProgress: true,
       theme: 'auto',
       darkMode: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches,
-      compactMode: false,
-      showResultsDialog: true,
       jdownloaderEnabled: false,
       jdownloaderHost: '',   // NEW v1.1.0: blank = local (127.0.0.1 / localhost)
       jdownloaderPort: 9666,
-      enableJDownloaderAutoDetect: false,
       // NEW v1.1.0: "Send to My Server".
       // 'myjd'  — MyJDownloader cloud relay: no ports, no server-side config.
       // 'aria2' — direct JSON-RPC to an aria2 daemon on the destination.
@@ -300,7 +293,6 @@
       skipDownloaded: false,
       enableHistory: true,
       debugMode: false,
-      enableRateLimit: true,
       // NEW v6.50: Performance settings
       enableRequestCache: true,
       enableParallelFetching: true,
@@ -1607,63 +1599,6 @@
         logDebug(`[JDownloader] Connection test failed on port ${testPort}:`, error.message);
       }
       return false;
-    }
-  }
-
-  // Auto-detection for JDownloader
-  let jdownloaderDetectionInterval = null;
-  let lastJDownloaderStatus = false;
-
-  async function checkJDownloaderStatus() {
-    const isConnected = await testJDownloaderConnection();
-
-    if (isConnected !== lastJDownloaderStatus) {
-      lastJDownloaderStatus = isConnected;
-
-      if (isConnected) {
-        // JDownloader just became available
-        logDebug('[JDownloader] Detected! Auto-enabling integration...');
-        Settings.set('jdownloaderEnabled', true);
-        showNotification('JDownloader detected and enabled!', 'success', 3000);
-
-        // Update UI if settings panel is open
-        const jdCheckbox = document.getElementById('jdownloader-enabled');
-        if (jdCheckbox) {
-          jdCheckbox.checked = true;
-        }
-      } else {
-        // JDownloader disconnected
-        logDebug('[JDownloader] Connection lost');
-        Settings.set('jdownloaderEnabled', false);
-
-        // Update UI if settings panel is open
-        const jdCheckbox = document.getElementById('jdownloader-enabled');
-        if (jdCheckbox) {
-          jdCheckbox.checked = false;
-        }
-      }
-    }
-
-    return isConnected;
-  }
-
-  function startJDownloaderDetection() {
-    // Don't check immediately to avoid permission prompts on page load
-    // Only check when actually needed (when user tries to use JDownloader)
-    if (jdownloaderDetectionInterval) {
-      clearInterval(jdownloaderDetectionInterval);
-    }
-
-    // Disabled automatic polling to prevent browser permission popups
-    // JDownloader status will be checked only when user attempts to send downloads
-    logDebug('[JDownloader] Auto-detection disabled to prevent permission popups. Will check on-demand when needed.');
-  }
-
-  function stopJDownloaderDetection() {
-    if (jdownloaderDetectionInterval) {
-      clearInterval(jdownloaderDetectionInterval);
-      jdownloaderDetectionInterval = null;
-      logDebug('[JDownloader] Auto-detection stopped');
     }
   }
 
@@ -6343,7 +6278,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
   // ---------- Built-in Download Manager ----------
   let downloadManagerState = null;
-  let currentAbortController = null;
   let currentDownloadIndex = -1; // Track which item is currently downloading
 
   // Browser notification support
@@ -7362,38 +7296,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
         }
       });
 
-      Object.entries(groups).forEach(([folderPath, items]) => {
-        const groupId = folderPath.replace(/[^a-z0-9]/gi, '-');
-
-        // Download all items in group
-        window[`downloadGroup_${groupId}`] = () => {
-          logDebug(`[DownloadManager] Starting group download: ${folderPath}`);
-          isPaused = false;
-          isDownloading = true;
-          // Set all items in group to pending
-          items.forEach(({ item, index }) => {
-            if (item.status !== 'completed') {
-              item.status = 'pending';
-              item.error = null;
-            }
-          });
-          renderQueue();
-          saveState();
-          // Start concurrent downloads (will process all pending items in group)
-          startNextDownload();
-        };
-
-        // Toggle selection for all items in group
-        window[`toggleGroupSelection_${groupId}`] = (checked) => {
-          items.forEach(({ item, index }) => {
-            downloadQueue[index].selected = checked;
-            const checkbox = manager.querySelector(`.item-checkbox[data-index="${index}"]`);
-            if (checkbox) checkbox.checked = checked;
-          });
-          saveState();
-        };
-      });
-
       updateStats();
       setupCheckboxHandlers(); // Set up checkbox event listeners
     }
@@ -7976,12 +7878,9 @@ Note: If blocked, right-click → Open, or run in Terminal:
       logDebug(`[DownloadManager] Cancelling ${incompleteCount} incomplete items`);
 
       // Abort every active download. Concurrent downloads store their
-      // controller in activeDownloads (not currentAbortController, which stays
-      // null in concurrent mode), so iterate the map like pause-all does —
+      // controller in activeDownloads, so iterate the map like pause-all does —
       // otherwise the fetches keep streaming in the background.
       abortAllActive();
-      currentAbortController = null;
-
       isPaused = true;
 
       // Remove all pending, paused, and downloading items
@@ -9201,19 +9100,6 @@ animation: fadeIn 0.3s ease;
               
               <div class="setting-row">
                 <div class="setting-info">
-                  <div class="setting-title" style="color: #dc2626;">Enable API Rate Limiting</div>
-                  <div class="setting-desc">Caps fetches to 10 per second to protect the server.</div>
-                </div>
-                <div class="setting-control">
-                  <label class="custom-toggle">
-                    <input type="checkbox" id="enable-rate-limit" ${currentSettings.enableRateLimit ? 'checked' : ''}>
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-              </div>
-              
-              <div class="setting-row">
-                <div class="setting-info">
                   <div class="setting-title">Verbose Debug Logging</div>
                   <div class="setting-desc">Print detailed network activity to browser console (F12).</div>
                 </div>
@@ -9264,18 +9150,6 @@ animation: fadeIn 0.3s ease;
                 </div>
               </div>
               
-              <div class="setting-row">
-                <div class="setting-info">
-                  <div class="setting-title">Compact View</div>
-                  <div class="setting-desc">Condense list padding to show more downloaded items per page.</div>
-                </div>
-                <div class="setting-control">
-                  <label class="custom-toggle">
-                    <input type="checkbox" id="compact-mode" ${currentSettings.compactMode ? 'checked' : ''}>
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-              </div>
             </div>
           </div>
           
@@ -9615,19 +9489,6 @@ animation: fadeIn 0.3s ease;
                 <div class="setting-control">
                   <label class="custom-toggle">
                     <input type="checkbox" id="jdownloader-enabled" ${currentSettings.jdownloaderEnabled ? 'checked' : ''}>
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-              </div>
-              
-              <div class="setting-row">
-                <div class="setting-info">
-                  <div class="setting-title">Automatic Silent Detection</div>
-                  <div class="setting-desc">Pings localhost port 9666 every 60s for live JD instance. (Will spawn 1 browser security prompt initially)</div>
-                </div>
-                <div class="setting-control">
-                  <label class="custom-toggle">
-                    <input type="checkbox" id="jdownloader-auto-detect" ${currentSettings.enableJDownloaderAutoDetect ? 'checked' : ''}>
                     <span class="toggle-slider"></span>
                   </label>
                 </div>
@@ -10483,18 +10344,15 @@ animation: fadeIn 0.3s ease;
           const outputFormat = settingsPanel.querySelector('#output-format').value;
           const theme = settingsPanel.querySelector('#theme').value;
           const darkMode = settingsPanel.querySelector('#dark-mode').checked;
-          const compactMode = settingsPanel.querySelector('#compact-mode').checked;
           const showProgress = settingsPanel.querySelector('#show-progress').checked;
           const autoConfirm = settingsPanel.querySelector('#auto-confirm').checked;
           const jdownloaderEnabled = settingsPanel.querySelector('#jdownloader-enabled').checked;
           const jdownloaderHost = (settingsPanel.querySelector('#jdownloader-host')?.value || '').trim();
           const jdownloaderPort = parseInt(settingsPanel.querySelector('#jdownloader-port').value);
-          const jdownloaderAutoDetect = settingsPanel.querySelector('#jdownloader-auto-detect').checked;
 
           // New settings
           const enableHistory = settingsPanel.querySelector('#enable-history').checked;
           const skipDownloaded = settingsPanel.querySelector('#skip-downloaded').checked;
-          const enableRateLimit = settingsPanel.querySelector('#enable-rate-limit').checked;
           const debugMode = settingsPanel.querySelector('#debug-mode').checked;
           const concurrentDownloads = parseInt(settingsPanel.querySelector('#concurrent-downloads').value) || 3;
 
@@ -10512,7 +10370,6 @@ animation: fadeIn 0.3s ease;
           Settings.set('outputFormat', outputFormat);
           Settings.set('theme', theme);
           Settings.set('darkMode', darkMode);
-          Settings.set('compactMode', compactMode);
           Settings.set('showProgress', showProgress);
           Settings.set('autoConfirm', autoConfirm);
           Settings.set('jdownloaderEnabled', jdownloaderEnabled);
@@ -10571,22 +10428,9 @@ animation: fadeIn 0.3s ease;
 
           Settings.set('subtitleLanguages', checkedLangs);
 
-          // Handle auto-detect toggle
-          const wasAutoDetectEnabled = Settings.get('enableJDownloaderAutoDetect');
-          Settings.set('enableJDownloaderAutoDetect', jdownloaderAutoDetect);
-
-          if (jdownloaderAutoDetect && !wasAutoDetectEnabled) {
-            // Just enabled - start detection
-            startJDownloaderDetection();
-          } else if (!jdownloaderAutoDetect && wasAutoDetectEnabled) {
-            // Just disabled - stop detection
-            stopJDownloaderDetection();
-          }
-
           // Save new settings
           Settings.set('enableHistory', enableHistory);
           Settings.set('skipDownloaded', skipDownloaded);
-          Settings.set('enableRateLimit', enableRateLimit);
           Settings.set('debugMode', debugMode);
           Settings.set('concurrentDownloads', Math.max(1, Math.min(5, concurrentDownloads))); // NEW v6.54: Save concurrent downloads
 
@@ -10603,9 +10447,6 @@ animation: fadeIn 0.3s ease;
             excludeExtras: filterExcludeExtras,
             excludeSubtitles: false
           });
-
-          // Update rate limiter
-          CONFIG.rateLimit.enabled = enableRateLimit;
 
           // Apply dark mode immediately
           applyDarkMode();
@@ -14638,17 +14479,6 @@ animation: fadeIn 0.3s ease;
           return await processServerRoot(server, token);
         }
 
-        // Handle library download
-        if (pageType === 'library') {
-          const libraryId = getItemIdFromUrl();
-          if (libraryId) {
-            logDebug('[Debug] Detected library page - library download');
-            const itemInfo = await getItemInfo(server, token, libraryId);
-            currentOperation = 'library';
-            return await processLibrary(server, token, libraryId, itemInfo.Name || 'Library');
-          }
-        }
-
         // Search results have no parentId to walk, so query the API instead.
         if (pageType === 'search') {
           logDebug('[Debug] Detected search results page - search download');
@@ -14859,66 +14689,7 @@ animation: fadeIn 0.3s ease;
       // Apply final deduplication at the top level
       items = deduplicateItems(items);
 
-      // Show results dialog or copy directly based on settings
-      const shouldShowResultsDialog = Settings.get('showResultsDialog');
-
-      if (shouldShowResultsDialog) {
-        // Show the post-scan results dialog
-        showResultsDialog(items, server, token, currentOperation, filteredCount);
-
-      } else {
-        // Legacy behavior - directly copy to clipboard
-        updateProgress(0, items.length, "Generating Links...");
-
-        const outputFormat = Settings.get('outputFormat');
-        const formatter = OutputFormatters[outputFormat];
-
-        if (!formatter) {
-          throw new Error(`Unknown output format: ${outputFormat}`);
-        }
-
-        const text = formatter(items, server, token);
-
-        // Copy to clipboard
-        updateProgress(items.length, items.length, "Copying to Clipboard...");
-        await copyToClipboard(text);
-
-        // Success feedback
-        const itemCount = items.length;
-        const operationType = currentOperation || 'item';
-        const formatName = CONFIG.outputFormats[outputFormat];
-
-        // Calculate file size info for success message
-        const sizeInfo = calculateTotalSize(items);
-        const sizeText = sizeInfo.totalSize > 0 ?
-          ` (${formatFileSize(sizeInfo.totalSize)}${sizeInfo.hasEstimates ? ' estimated' : ''})` : '';
-
-        let successMessage = `Copied ${itemCount} download link${itemCount > 1 ? 's' : ''} (${formatName})${sizeText} to clipboard!`;
-        if (operationType === 'folder') {
-          const episodeCount = items.filter(i => i.Type === 'Episode').length;
-          const directCount = itemCount - episodeCount;
-
-          if (episodeCount > 0 && directCount > 0) {
-            successMessage = `Copied ${itemCount} items from folder (${directCount} files + ${episodeCount} episodes) as ${formatName}${sizeText} to clipboard!`;
-          } else if (episodeCount > 0) {
-            successMessage = `Copied ${episodeCount} episodes from TV series in folder as ${formatName}${sizeText} to clipboard!`;
-          } else {
-            successMessage = `Copied ${itemCount} items from folder as ${formatName}${sizeText} to clipboard!`;
-          }
-        } else if (operationType === 'collection') {
-          successMessage = `Copied ${itemCount} items from collection as ${formatName}${sizeText} to clipboard!`;
-        } else if (operationType === 'show') {
-          const ids = parseIdsFromPage();
-          const isWholeShow = ids && (ids.seasonIdFromPath === ids.showId);
-          if (isWholeShow) {
-            successMessage = `Copied ${itemCount} episodes from entire show as ${formatName}${sizeText} to clipboard!`;
-          } else {
-            successMessage = `Copied ${itemCount} episodes from season as ${formatName}${sizeText} to clipboard!`;
-          }
-        }
-
-        showNotification(successMessage, 'success');
-      }
+      showResultsDialog(items, server, token, currentOperation, filteredCount);
 
       if (abortController.signal.aborted) {
         throw new Error('Operation cancelled');
@@ -15275,10 +15046,6 @@ animation: fadeIn 0.3s ease;
       applyDarkMode();
       createButton();
       setupKeyboardShortcuts();
-      // Only start auto-detection if user explicitly enabled it
-      if (Settings.get('enableJDownloaderAutoDetect')) {
-        startJDownloaderDetection();
-      }
 
       console.log(`PulseGrab v${SCRIPT_VERSION} loaded! 🚀 Features: 10+ formats, built-in download manager, wget/curl scripts, JDownloader integration, selective downloads!`);
 
@@ -15308,7 +15075,6 @@ animation: fadeIn 0.3s ease;
     if (progressModal) {
       hideProgressModal();
     }
-    stopJDownloaderDetection(); // Stop auto-detection when cleaning up
     document.querySelectorAll('.pulse-dl-notification').forEach(n => n.remove());
     document.querySelectorAll('.pg-overlay-nav').forEach(n => n.remove());
     const settingsBtn = document.getElementById(CONFIG.settingsId);
