@@ -3,5 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 node --check releases/PulseGrab.user.js
-[ -d tests ] && node --test tests/ || true
+if [ -d tests ]; then
+  node --test tests/*.test.mjs
+  bash tests/hook.test.sh
+fi
 echo "check: OK"
