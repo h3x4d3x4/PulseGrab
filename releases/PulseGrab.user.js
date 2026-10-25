@@ -15514,25 +15514,6 @@ animation: fadeIn 0.3s ease;
       document.body.classList.add('pulsegrab-dark-mode');
       console.log('[PulseGrab] Applied dark mode class to body');
 
-      // Apply dark mode to download manager and settings panel if they exist
-      const applyToElements = () => {
-        const manager = document.querySelector('#pulse-grab-manager');
-        const settings = document.querySelector('#pulse-grab-settings');
-        if (manager) {
-          manager.setAttribute('data-dark-mode', 'true');
-          console.log('[PulseGrab] Set data-dark-mode on manager:', manager.getAttribute('data-dark-mode'));
-        }
-        if (settings) {
-          settings.setAttribute('data-dark-mode', 'true');
-          console.log('[PulseGrab] Set data-dark-mode on settings:', settings.getAttribute('data-dark-mode'));
-        }
-      };
-
-      // Apply immediately and watch for changes
-      applyToElements();
-      const observer = new MutationObserver(applyToElements);
-      observer.observe(document.body, { childList: true, subtree: true });
-
       // Inject dark mode styles if not already present
       if (!document.getElementById('pulsegrab-dark-mode-styles')) {
         const style = document.createElement('style');
@@ -15547,59 +15528,6 @@ animation: fadeIn 0.3s ease;
                            - Text: #e0e0e0 (light gray text)
                            - Accent: adaptive server theme color
                         */
-
-                        body.pulsegrab-dark-mode {
-                          background-color: #101010 !important;
-                        color: #e0e0e0 !important;
-          }
-
-                        body.pulsegrab-dark-mode *::-webkit-scrollbar {
-                          width: 10px;
-                        height: 10px;
-          }
-
-                        body.pulsegrab-dark-mode *::-webkit-scrollbar-track {
-                          background: #1c1c1c;
-          }
-
-                        body.pulsegrab-dark-mode *::-webkit-scrollbar-thumb {
-                          background: #3a3a3a;
-                        border-radius: 5px;
-          }
-
-                        body.pulsegrab-dark-mode *::-webkit-scrollbar-thumb:hover {
-                          background: #4a4a4a;
-          }
-
-                        /* Server containers */
-                        body.pulsegrab-dark-mode .emby-container,
-                        body.pulsegrab-dark-mode .card,
-                        body.pulsegrab-dark-mode .cardContent,
-                        body.pulsegrab-dark-mode .itemsContainer,
-                        body.pulsegrab-dark-mode .verticalSection {
-                          background-color: #1c1c1c !important;
-                        color: #e0e0e0 !important;
-          }
-
-                        body.pulsegrab-dark-mode .cardText,
-                        body.pulsegrab-dark-mode .cardTextCentered,
-                        body.pulsegrab-dark-mode .sectionTitle,
-                        body.pulsegrab-dark-mode .itemName,
-                        body.pulsegrab-dark-mode .detailPageTitle {
-                          color: #e0e0e0 !important;
-          }
-
-                        body.pulsegrab-dark-mode .pageTitleWithLogo,
-                        body.pulsegrab-dark-mode h1,
-                        body.pulsegrab-dark-mode h2,
-                        body.pulsegrab-dark-mode h3 {
-                          color: #ffffff !important;
-          }
-
-                        body.pulsegrab-dark-mode .backgroundContainer,
-                        body.pulsegrab-dark-mode .mainAnimatedPage {
-                          background-color: #101010 !important;
-          }
 
                         /* ========== PulseGrab Download Manager Dark Mode ========== */
                         #pulse-grab-manager[data-dark-mode="true"],
@@ -15790,16 +15718,6 @@ animation: fadeIn 0.3s ease;
                           color: #e0e0e0 !important;
           }
 
-                        /* Override inline background colors in dark mode */
-                        [data-dark-mode="true"] div[style*="background"] {
-                          background-color: #252525 !important;
-          }
-
-                        /* Specifically target info boxes with light backgrounds */
-                        [data-dark-mode="true"] div[style*="background: #f"] {
-                          background-color: #1c1c1c !important;
-          }
-
                         [data-dark-mode="true"] a {
                           color: #00a4dc !important;
           }
@@ -15815,7 +15733,6 @@ animation: fadeIn 0.3s ease;
           }
 
                         /* ========== Checkbox Styling for Dark Mode ========== */
-                        body.pulsegrab-dark-mode input[type="checkbox"],
                         [data-dark-mode="true"] input[type="checkbox"] {
                           appearance: none;
                         -webkit-appearance: none;
@@ -15827,19 +15744,16 @@ animation: fadeIn 0.3s ease;
                         cursor: pointer;
           }
 
-                        body.pulsegrab-dark-mode input[type="checkbox"]:hover,
                         [data-dark-mode="true"] input[type="checkbox"]:hover {
                           border-color: #6a6a6a !important;
                         background-color: #3a3a3a !important;
           }
 
-                        body.pulsegrab-dark-mode input[type="checkbox"]:checked,
                         [data-dark-mode="true"] input[type="checkbox"]:checked {
                           background-color: ${getTheme().primary} !important;
                         border-color: ${getTheme().primary} !important;
           }
 
-                        body.pulsegrab-dark-mode input[type="checkbox"]:checked::after,
                         [data-dark-mode="true"] input[type="checkbox"]:checked::after {
                           content: "✓";
                         position: absolute;
