@@ -4677,6 +4677,7 @@ exit 0
         if (result.subtitleCount) notes.push(`${result.subtitleCount} subtitle file(s) included`);
         if (result.unresolvable) notes.push(`${result.unresolvable} had no download URL`);
         if (result.failures.length) notes.push(`${result.failures.length} package(s) failed — see console`);
+        if (result.sent > 0 && !result.failures.length) DownloadHistory.mark(items);
         showNotification(
           `Sent ${result.sent} file(s) to ${remoteTargetLabel() || 'your JDownloader'}. Track progress in JDownloader or at my.jdownloader.org.`
           + (notes.length ? ` ${notes.join('; ')}.` : ''),
@@ -6534,6 +6535,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         jdownloaderBtn.innerHTML = `${Icons.download} Sending...`;
 
         await sendToJDownloader(uniqueItems, server, token, packageName);
+        DownloadHistory.mark(uniqueItems);
         showNotification(`Sent ${uniqueItems.length} downloads to JDownloader!`, 'success');
         cleanup();
       } catch (error) {
@@ -6909,7 +6911,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           url: constructDownloadUrl(item, server, token),
           status: 'pending',
           progress: 0,
-          downloadInfo: downloadInfo,
+          downloadInfo: { ...downloadInfo, _rawItem: item },
           error: null,
           selected: false,
           size: size
@@ -8131,6 +8133,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         item.status = 'completed';
         item.progress = 100;
+        // History records real downloads only (not scans)
+        DownloadHistory.mark([item.downloadInfo?._rawItem || { Id: item.id, Name: item.name, Type: item.downloadInfo?.type, Size: item.size }]);
 
         // NEW v6.59: Download Subtitles
         if (item.downloadInfo && item.downloadInfo.subtitles && item.downloadInfo.subtitles.length > 0) {
