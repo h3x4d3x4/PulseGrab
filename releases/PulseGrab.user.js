@@ -13721,7 +13721,7 @@ animation: fadeIn 0.3s ease;
       Limit: limit.toString(),
       SortBy: 'SortName',
       SortOrder: 'Ascending',
-      Recursive: (options.recursive || SERVER_TYPE === 'jellyfin') ? 'true' : 'false',
+      Recursive: options.recursive ? 'true' : 'false',
       Fields: 'Path,FileName,OriginalTitle,ProductionYear,Container,MediaType,Type,MediaSources',
       api_key: token
     });
