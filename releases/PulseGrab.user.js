@@ -10655,14 +10655,16 @@ animation: fadeIn 0.3s ease;
                             <strong>Features:</strong>
                             <ul style="margin: 8px 0; padding-left: 20px;">
                               <li>10+ output formats (URLs, wget, aria2c, curl, JDownloader, and more)</li>
-                              <li>Built-in Download Manager with search, bulk actions, and progress tracking</li>
+                              <li>Built-in Download Manager with search, bulk actions and progress tracking; on Chrome/Edge it can stream straight into a folder you choose</li>
+                              <li>Send to My Server: your own aria2 or My.JDownloader receives the files straight from the media server (guided setup wizard)</li>
                               <li>JDownloader integration for automatic downloads</li>
-                              <li>Keyboard shortcuts for quick access (Ctrl+D, Ctrl+H, Ctrl+S, Escape)</li>
+                              <li>Download a whole search result page</li>
+                              <li>Keyboard shortcuts for quick access (Ctrl+D, Ctrl+H, Ctrl+S, Escape, plus Download Manager keys)</li>
                               <li>Selective downloads with checkboxes and Select All functionality</li>
                               <li>QR codes for mobile transfers</li>
-                              <li>Download history tracking with export capability</li>
-                              <li>Filter by quality and file size</li>
-                              <li>Dark mode with server-adaptive themed colors</li>
+                              <li>Download history you can view, export (JSON) and clear</li>
+                              <li>Filter by quality, file size and extras</li>
+                              <li>Dark mode (Auto, Light or Dark) with colors that match your server</li>
                               <li>Grouped downloads by series/season</li>
                               <li>Stats view for monitoring progress</li>
                             </ul>
@@ -10846,7 +10848,7 @@ animation: fadeIn 0.3s ease;
                             </summary>
                             <div class="wiki-content">
                               <ol>
-                                <li>Navigate to a movie, TV show, season, or collection page on your media server.</li>
+                                <li>Navigate to a movie, TV show, season, collection, library or search results page on your media server.</li>
                                 <li>Press <strong>Ctrl+D</strong> or click the floating "Get Links" button.</li>
                                 <li>Choose your preferred output format or use the built-in Download Manager.</li>
                                 <li>When the scan finishes, a results dialog lets you copy the links, save a script, or send them to a server.</li>
@@ -10865,7 +10867,7 @@ animation: fadeIn 0.3s ease;
                               <p><strong>Whole Server:</strong> Go to the server home page (Home icon). The script will prompt you to scan all libraries, or specific libraries like "Movies" or "TV Shows".</p>
                               <ul>
                                 <li>Massively bulk-download entire libraries.</li>
-                                <li>Filters (like Quality Presets) are strictly respected.</li>
+                                <li>Your filters (quality preset, size, extras) are applied, and the results dialog says how many items they removed.</li>
                                 <li><em>Note: Scanning massive libraries may take several minutes.</em></li>
                               </ul>
                             </div>
@@ -10895,11 +10897,13 @@ animation: fadeIn 0.3s ease;
                             </summary>
                             <div class="wiki-content">
                               <ul>
-                                <li><strong>Concurrent Downloads:</strong> Download 1-5 files simultaneously (configurable).</li>
+                                <li><strong>Concurrent Downloads:</strong> Download 1-5 files at once (Settings, General).</li>
                                 <li><strong>Smart Grouping:</strong> Organizes items by Movie, Series, and Season directories.</li>
                                 <li><strong>Selective Downloads:</strong> Group checkboxes allow downloading specific seasons instantly.</li>
                                 <li><strong>Search/Filter:</strong> Quickly locate items in massive queues.</li>
-                                <li><strong>Persistent State:</strong> Your queue and progress survive page refreshes.</li>
+                                <li><strong>Choose a folder:</strong> On Chrome and Edge, pick a folder and files stream straight into it (folders like Show/Season are created for you), so big files don't sit in memory. Other browsers save to the normal Downloads folder.</li>
+                                <li><strong>Persistent State:</strong> Your queue survives page refreshes. Downloads that were interrupted start over from the beginning.</li>
+                                <li><strong>Keys:</strong> Space pauses or resumes, Ctrl+A selects all, Ctrl+D deselects, Ctrl+F searches, Delete removes the selected items, Escape closes.</li>
                               </ul>
                             </div>
                           </details>
@@ -10911,7 +10915,7 @@ animation: fadeIn 0.3s ease;
                               <svg class="wiki-icon wiki-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
                             </summary>
                             <div class="wiki-content">
-                              <p style="margin-top:0;"><strong>Formats:</strong> Export as Wget script, Aria2, plain text, JSON, cURL, PowerShell, JDownloader, or use the Native Download Manager.</p>
+                              <p style="margin-top:0;"><strong>Formats:</strong> Export as Wget script, Aria2, plain text, JSON, cURL, PowerShell, JDownloader, email, or use the Download Manager. <strong>Send to My Server</strong> hands the files to your own aria2 or My.JDownloader; Settings has a setup wizard.</p>
                               <p><strong>Filters:</strong> Accessible via the Settings gear.</p>
                               <ul>
                                 <li>Filter by minimum and maximum file size to exclude samples/trailers.</li>
@@ -10928,12 +10932,12 @@ animation: fadeIn 0.3s ease;
                               <svg class="wiki-icon wiki-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
                             </summary>
                             <div class="wiki-content">
-                              <p style="margin-top:0;"><strong>Subtitles:</strong> Select desired languages in Settings. PulseGrab will automatically extract internal subtitle tracks natively, or download external subtitles (SRT/ASS/VTT) if available on the server.</p>
+                              <p style="margin-top:0;"><strong>Subtitles:</strong> Select desired languages in Settings. PulseGrab downloads external subtitle files (SRT/ASS/VTT) next to the video when the server has them. Subtitles built into the video file are not extracted.</p>
                               <p><strong>Naming Templates:</strong> Customize output filenames per type.</p>
                               <ul>
                                 <li><strong>Movies:</strong> <code>{Name} ({Year}) - {Quality}</code></li>
                                 <li><strong>Episodes:</strong> <code>{ShowName} - S{Season}E{Episode} - {Name}</code></li>
-                                <li>Use tags like <code>{Resolution}</code>, <code>{Codec}</code>, or <code>{AudioCodec}</code>.</li>
+                                <li>Other tags: <code>{Series}</code>, <code>{ShowName}</code>, <code>{Season}</code>, <code>{Episode}</code>, <code>{Title}</code>, <code>{Year}</code>, <code>{Resolution}</code>, <code>{Quality}</code>, <code>{Codec}</code>, <code>{AudioCodec}</code>, <code>{Id}</code>.</li>
                               </ul>
                             </div>
                           </details>
@@ -10949,6 +10953,7 @@ animation: fadeIn 0.3s ease;
                                 <li><strong>Ctrl+D:</strong> Open PulseGrab main dialog/Generate links.</li>
                                 <li><strong>Ctrl+H:</strong> Open download history.</li>
                                 <li><strong>Ctrl+S:</strong> Save settings (when panel is open).</li>
+                                <li><strong>In the Download Manager:</strong> Space pause/resume, Ctrl+A select all, Ctrl+D deselect, Ctrl+F search, Delete remove selected.</li>
                                 <li><strong>Escape:</strong> Close any open dialog or modal.</li>
                               </ul>
                             </div>
