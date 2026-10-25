@@ -9825,7 +9825,7 @@ animation: fadeIn 0.3s ease;
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-title">My Server Address</div>
-                  <div class="setting-desc">e.g. <code>http://192.168.100.252:8096</code>. Leave blank to use the current tab when you're already on your own server.</div>
+                  <div class="setting-desc">e.g. <code>http://192.168.1.50:8096</code>. Leave blank to use the current tab when you're already on your own server.</div>
                 </div>
                 <div class="setting-control" style="max-width: 240px;">
                   <input type="text" id="dest-server-url" class="modern-input" value="${escapeHtml(currentSettings.destServerUrl || '')}" placeholder="http://192.168.1.50:8096">
