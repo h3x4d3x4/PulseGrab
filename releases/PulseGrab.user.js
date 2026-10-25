@@ -12732,6 +12732,9 @@ animation: fadeIn 0.3s ease;
     // Server-specific home: #!/server/{machineId} with no deeper path
     if (/^#!\/server\/[^/]+\/?$/.test(hash)) return 'server-root';
 
+    // Search: #!/search?pivot=top&query=dune
+    if (isSearchView(hash)) return 'search';
+
     // Item detail: any URL containing /details
     if (hash.includes('/details')) return 'item';
 
@@ -13631,19 +13634,60 @@ animation: fadeIn 0.3s ease;
   // yields Series, which are folders — those get expanded by ParentId so that
   // e.g. every Digimon episode is included even though no episode title
   // contains "Digimon".
+  // ---------- Plex search ----------
+  // Plex Web keeps the active search tab in ?pivot=. Unknown or "top" = all types.
+  const PLEX_PIVOT_TYPES = {
+    movie: ['Movie'], movies: ['Movie'],
+    show: ['Series'], shows: ['Series'], tv: ['Series'],
+    episode: ['Episode'], episodes: ['Episode'],
+    artist: ['MusicArtist'], album: ['MusicAlbum'], track: ['Audio'],
+    music: ['MusicArtist', 'MusicAlbum', 'Audio'],
+    collection: ['Collection'], collections: ['Collection'],
+    people: [], person: [], actor: []
+  };
+
+  function getPlexSearchPivot() {
+    const match = (window.location.hash + window.location.search).match(/[?&]pivot=([^&#]+)/i);
+    if (!match) return null;
+    const pivot = decodeURIComponent(match[1]).toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(PLEX_PIVOT_TYPES, pivot)) return { label: pivot, types: null };
+    return { label: pivot, types: PLEX_PIVOT_TYPES[pivot] };
+  }
+
+  const PLEX_SEARCHABLE = ['movie', 'show', 'season', 'episode', 'artist', 'album', 'track', 'collection', 'clip', 'photo'];
+
+  // /hubs/search groups results by type; the older /search returns a flat list
+  // and is kept as the fallback for servers that don't have hubs.
+  async function fetchPlexSearch(server, token, term) {
+    const query = encodeURIComponent(term);
+    let metadata = [];
+    try {
+      const data = await fetchWithRetry(`${server}/hubs/search?query=${query}&limit=100&includeCollections=1&X-Plex-Token=${token}`);
+      metadata = (data.MediaContainer?.Hub || []).flatMap(hub => hub.Metadata || []);
+    } catch (error) {
+      if (error.message === 'Operation cancelled' || error.name === 'AbortError') throw error;
+      logDebug('[Plex] hubs/search failed, trying /search:', error.message);
+    }
+    if (!metadata.length) {
+      const data = await fetchWithRetry(`${server}/search?query=${query}&X-Plex-Token=${token}`);
+      metadata = data.MediaContainer?.Metadata || [];
+    }
+    const seen = new Set();
+    return metadata
+      .filter(entry => entry && entry.ratingKey && PLEX_SEARCHABLE.includes(entry.type))
+      .filter(entry => !seen.has(entry.ratingKey) && seen.add(entry.ratingKey))
+      .map(normalizeItemPlex);
+  }
+
   async function processSearch(server, token) {
     currentOperation = 'search';
-
-    if (SERVER_TYPE === 'plex') {
-      throw new Error('Search downloads are not supported on Plex yet. Open the movie, show, or collection page instead.');
-    }
 
     const term = getSearchTerm();
     if (!term) {
       throw new Error('Could not read the search term. Type a search, wait for the results to appear, then press Download.');
     }
 
-    const tab = getActiveSearchTab();
+    const tab = (SERVER_TYPE === 'plex' && getPlexSearchPivot()) || getActiveSearchTab();
     const types = tab.types;
     logDebug(`[Debug] Search "${term}" | tab: ${tab.label} | types: ${types ? types.join(',') : 'ALL'}`);
 
@@ -13654,7 +13698,9 @@ animation: fadeIn 0.3s ease;
     updateProgress(0, 0, 'Searching...');
     showNotification(`Searching for "${term}"...`, 'info', 2500);
 
-    const results = await fetchAllSearchItems(server, token, term, types, (c, t, msg) => updateProgress(c, t, msg));
+    const results = SERVER_TYPE === 'plex'
+      ? (await fetchPlexSearch(server, token, term)).filter(item => !types || types.includes(item.Type))
+      : await fetchAllSearchItems(server, token, term, types, (c, t, msg) => updateProgress(c, t, msg));
 
     if (!results.length) {
       throw new Error(`No results for "${term}"${types ? ` in the ${tab.label} tab` : ''}.`);
@@ -13672,6 +13718,19 @@ animation: fadeIn 0.3s ease;
     downloadableItems.push(...await expandAll(server, token, containers));
 
     downloadableItems = deduplicateItems(downloadableItems);
+
+    // Plex search hubs sometimes return a leaf without its Media/Part, which is
+    // what the download URL is built from; fetch those few in full.
+    if (SERVER_TYPE === 'plex') {
+      const incomplete = downloadableItems.filter(item => !item._plexPartKey);
+      if (incomplete.length) {
+        const full = await parallelFetch(incomplete.map(item => async () => {
+          try { return await getItemInfo(server, token, item.Id); } catch (e) { return item; }
+        }), 5);
+        const byId = new Map(full.filter(Boolean).map(item => [item.Id, item]));
+        downloadableItems = downloadableItems.map(item => byId.get(item.Id) || item);
+      }
+    }
 
     if (!downloadableItems.length) {
       throw new Error(`Found ${results.length} search result(s) for "${term}" but none had a downloadable file.`);
