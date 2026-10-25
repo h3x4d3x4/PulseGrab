@@ -853,6 +853,7 @@
   let isProcessing = false;
   let button = null;
   let settingsPanel = null;
+  let detachSettingsEscape = () => {};
   let progressModal = null;
   let abortController = null;
   let currentOperation = null;
@@ -5999,10 +6000,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
       </div>
     `;
 
+    let detachEscape = () => {};
     const cleanup = () => {
+      detachEscape();
       overlay.style.animation = 'fadeIn 0.2s ease reverse';
       setTimeout(() => overlay.remove(), 200);
     };
+    detachEscape = closeOnEscape(overlay, cleanup);
 
     // Event listeners
     dialog.querySelector('#results-close').addEventListener('click', cleanup);
@@ -6267,9 +6271,11 @@ Note: If blocked, right-click → Open, or run in Terminal:
       }
     }
 
-    dialog.querySelector('#qr-close').addEventListener('click', () => overlay.remove());
+    const closeQR = () => { detachEscape(); overlay.remove(); };
+    const detachEscape = closeOnEscape(overlay, closeQR);
+    dialog.querySelector('#qr-close').addEventListener('click', closeQR);
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.remove();
+      if (e.target === overlay) closeQR();
     });
 
     overlay.appendChild(dialog);
@@ -10057,10 +10063,12 @@ animation: fadeIn 0.3s ease;
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
     settingsPanel = overlay;
+    detachSettingsEscape = closeOnEscape(overlay, hideSettingsPanel);
   }
 
   function hideSettingsPanel() {
     if (settingsPanel) {
+      detachSettingsEscape();
       settingsPanel.style.animation = 'fadeIn 0.2s ease reverse';
       setTimeout(() => {
         if (settingsPanel) {
@@ -10722,8 +10730,10 @@ animation: fadeIn 0.3s ease;
                         `;
 
     const closeAbout = () => {
+      detachEscape();
       overlay.remove();
     };
+    const detachEscape = closeOnEscape(overlay, closeAbout);
 
     dialog.querySelector('#close-about').addEventListener('click', closeAbout);
     dialog.querySelector('#close-about-bottom').addEventListener('click', closeAbout);
@@ -10946,8 +10956,10 @@ animation: fadeIn 0.3s ease;
                         `;
 
     const closeWiki = () => {
+      detachEscape();
       overlay.remove();
     };
+    const detachEscape = closeOnEscape(overlay, closeWiki);
 
     dialog.querySelector('#close-wiki').addEventListener('click', closeWiki);
     dialog.querySelector('#close-wiki-bottom').addEventListener('click', closeWiki);
@@ -11073,13 +11085,17 @@ animation: fadeIn 0.3s ease;
                         </div>
                         `;
 
-    dialog.querySelector('#close-history').addEventListener('click', () => {
+    const closeHistory = () => {
+      detachEscape();
       overlay.remove();
-    });
+    };
+    const detachEscape = closeOnEscape(overlay, closeHistory);
+
+    dialog.querySelector('#close-history').addEventListener('click', closeHistory);
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
-        overlay.remove();
+        closeHistory();
       }
     });
 
@@ -11311,10 +11327,16 @@ animation: fadeIn 0.3s ease;
                         </div>
                         `;
 
+    let detachEscape = () => {};
     const cleanup = () => {
+      detachEscape();
       overlay.style.animation = 'fadeIn 0.2s ease reverse';
       setTimeout(() => overlay.remove(), 200);
     };
+    detachEscape = closeOnEscape(overlay, () => {
+      cleanup();
+      onCancel?.();
+    });
 
     dialog.querySelector('#confirm-cancel').addEventListener('click', () => {
       cleanup();
@@ -11497,10 +11519,16 @@ animation: fadeIn 0.3s ease;
                         </div>
                         `;
 
+    let detachEscape = () => {};
     const cleanup = () => {
+      detachEscape();
       overlay.style.animation = 'fadeIn 0.2s ease reverse';
       setTimeout(() => overlay.remove(), 200);
     };
+    detachEscape = closeOnEscape(overlay, () => {
+      cleanup();
+      onCancel?.();
+    });
 
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
@@ -12178,49 +12206,6 @@ animation: fadeIn 0.3s ease;
         return;
       }
 
-      // Escape: Close any open modal
-      if (e.key === 'Escape') {
-        // Close modals in priority order
-        const aboutOverlay = document.getElementById('about-overlay');
-        const wikiOverlay = document.getElementById('wiki-overlay');
-        const historyOverlay = document.getElementById('history-overlay');
-        const resultsDialog = document.getElementById('results-dialog');
-        const managerOverlay = document.getElementById('download-manager-overlay');
-
-        if (aboutOverlay) {
-          aboutOverlay.remove();
-          return;
-        }
-        if (wikiOverlay) {
-          wikiOverlay.remove();
-          return;
-        }
-        if (historyOverlay) {
-          historyOverlay.remove();
-          return;
-        }
-        if (resultsDialog) {
-          resultsDialog.remove();
-          return;
-        }
-        if (managerOverlay) {
-          // Ask for confirmation if downloads are in progress
-          const isDownloading = managerOverlay.querySelector('#download-list')?.innerHTML.includes('status === \'downloading\'');
-          if (isDownloading) {
-            if (confirm('Downloads are in progress. Close anyway? Progress will be saved and you can resume later.')) {
-              managerOverlay.remove();
-            }
-          } else {
-            managerOverlay.remove();
-          }
-          return;
-        }
-        if (settingsPanel) {
-          hideSettingsPanel();
-          return;
-        }
-      }
-
       // Ctrl+S: Save settings when settings panel is open
       if ((e.ctrlKey || e.metaKey) && e.key === 's' && settingsPanel) {
         e.preventDefault();
@@ -12446,16 +12431,22 @@ animation: fadeIn 0.3s ease;
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
+    const detachEscape = closeOnEscape(overlay, () => {
+      overlay.remove();
+      onCancel();
+    });
     dialog.addEventListener('click', (e) => {
       const btn = e.target.closest('button');
       if (!btn) return;
       if (btn.hasAttribute('data-cancel')) {
+        detachEscape();
         overlay.remove();
         onCancel();
         return;
       }
       const idx = parseInt(btn.getAttribute('data-idx'));
       if (!isNaN(idx) && servers[idx]) {
+        detachEscape();
         overlay.remove();
         onSelect(servers[idx]);
       }
