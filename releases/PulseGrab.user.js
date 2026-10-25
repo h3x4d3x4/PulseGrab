@@ -266,7 +266,6 @@
       outputFormat: 'links',
       autoConfirm: false,
       showProgress: true,
-      batchSize: 50,
       theme: 'auto',
       darkMode: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches,
       compactMode: false,
@@ -9711,16 +9710,6 @@ animation: fadeIn 0.3s ease;
                   </select>
                 </div>
               </div>
-              
-              <div class="setting-row">
-                <div class="setting-info">
-                  <div class="setting-title">Batch Size Limit</div>
-                  <div class="setting-desc">Concurrent items to process (10-200). Higher = faster but resource intensive.</div>
-                </div>
-                <div class="setting-control" style="max-width: 120px;">
-                  <input type="number" id="batch-size" class="modern-input" value="${currentSettings.batchSize}" min="10" max="200">
-                </div>
-              </div>
             </div>
             
             <h3 style="margin: 32px 0 16px 0; color: ${isDarkMode ? '#e0e0e0' : '#1e293b'}; font: 600 18px system-ui, sans-serif;">Advanced Controls</h3>
@@ -11047,7 +11036,6 @@ animation: fadeIn 0.3s ease;
           const theme = settingsPanel.querySelector('#theme').value;
           const darkMode = settingsPanel.querySelector('#dark-mode').checked;
           const compactMode = settingsPanel.querySelector('#compact-mode').checked;
-          const batchSize = parseInt(settingsPanel.querySelector('#batch-size').value);
           const showProgress = settingsPanel.querySelector('#show-progress').checked;
           const autoConfirm = settingsPanel.querySelector('#auto-confirm').checked;
           const jdownloaderEnabled = settingsPanel.querySelector('#jdownloader-enabled').checked;
@@ -11077,7 +11065,6 @@ animation: fadeIn 0.3s ease;
           Settings.set('theme', theme);
           Settings.set('darkMode', darkMode);
           Settings.set('compactMode', compactMode);
-          Settings.set('batchSize', Math.max(10, Math.min(200, batchSize)));
           Settings.set('showProgress', showProgress);
           Settings.set('autoConfirm', autoConfirm);
           Settings.set('jdownloaderEnabled', jdownloaderEnabled);
@@ -11172,9 +11159,6 @@ animation: fadeIn 0.3s ease;
 
           // Update rate limiter
           CONFIG.rateLimit.enabled = enableRateLimit;
-
-          // Update CONFIG with new batch size
-          CONFIG.batchSize = Settings.get('batchSize');
 
           // Apply dark mode immediately
           applyDarkMode();
