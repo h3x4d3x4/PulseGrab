@@ -566,14 +566,14 @@
       `;
 
       const changelogPreview = this._lastResult.changelog
-        ? this._lastResult.changelog.split('\n').filter(l => l.trim()).slice(0, 3).join('<br>')
+        ? this._lastResult.changelog.split('\n').filter(l => l.trim()).slice(0, 3).map(escapeHtml).join('<br>')
         : 'Bug fixes and improvements';
 
       banner.innerHTML = `
         <style>@keyframes pulsegrab-slide-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }</style>
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
           <span style="font-size:18px;">🚀</span>
-          <strong style="font-size:14px;">PulseGrab v${this._lastResult.version} Available</strong>
+          <strong style="font-size:14px;">PulseGrab v${escapeHtml(this._lastResult.version)} Available</strong>
           <button id="pulsegrab-dismiss-update" style="margin-left:auto; background:none; border:none; cursor:pointer; font-size:18px; color:${isDarkMode ? '#888' : '#999'}; padding:0 4px;">&times;</button>
         </div>
         <div style="font-size:12px; color:${isDarkMode ? '#aaa' : '#666'}; margin-bottom:10px; line-height:1.4;">${changelogPreview}</div>
@@ -3425,7 +3425,7 @@
               'The hostname or IP of the machine running aria2.')}
             <div style="padding: 11px 13px; border-radius: 9px; font: 12px system-ui; line-height: 1.6;
               background: ${isDarkMode ? '#141414' : '#f9fafb'}; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
-              Port <b>${state.port}</b> and the secret from the compose file are used automatically.
+              Port <b>${escapeHtml(state.port)}</b> and the secret from the compose file are used automatically.
             </div>`,
           check: async () => {
             const host = dialog.querySelector('#wz-host').value.trim();
@@ -5462,7 +5462,7 @@ exit 0
           color: ${isDarkMode ? '#6b7280' : '#9ca3af'}; line-height: 1.5;
         ">
           Files transfer directly from the source server to
-          <strong>${remoteHost()}</strong>. You can close this tab — the transfer keeps running.
+          <strong>${escapeHtml(remoteHost())}</strong>. You can close this tab — the transfer keeps running.
         </div>
       </div>
     `;
@@ -6447,7 +6447,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           display: flex; align-items: center; gap: 6px;
         ">
           ${Icons.check}
-          JDownloader package: &ldquo;${packageName}&rdquo;
+          JDownloader package: &ldquo;${escapeHtml(packageName)}&rdquo;
         </div>
       </div>
     `;
@@ -6747,7 +6747,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         container.innerHTML = `
           <div style="padding: 20px; text-align: center; color: #6b7280; font: 13px system-ui, sans-serif;">
             <div style="margin-bottom: 12px; color: #ef4444;">QR Code generation failed</div>
-            <div>${error.message || 'Unknown error'}</div>
+            <div>${escapeHtml(error.message || 'Unknown error')}</div>
           </div>
         `;
       }
@@ -7241,7 +7241,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       const parts = [];
 
       // Current download
-      parts.push(`<span style="font-weight: 600;">Downloading:</span> ${downloading.downloadInfo.filename}`);
+      parts.push(`<span style="font-weight: 600;">Downloading:</span> ${escapeHtml(downloading.downloadInfo.filename)}`);
       if (downloading.size > 0) {
         parts.push(`(${formatFileSize(downloading.size)})`);
       }
@@ -7362,7 +7362,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           return `
                 <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;background:${isDarkMode ? '#0f172a' : 'white'};border:1px solid ${isDarkMode ? '#1f2937' : '#e2e8f0'};">
                   <div style="min-width:0;">
-                    <div style="font:600 12px system-ui;color:${isDarkMode ? '#e2e8f0' : '#1e293b'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${folder}</div>
+                    <div style="font:600 12px system-ui;color:${isDarkMode ? '#e2e8f0' : '#1e293b'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(folder)}</div>
                     <div style="margin-top:5px;width:100%;height:4px;border-radius:2px;overflow:hidden;background:${isDarkMode ? '#1f2937' : '#e2e8f0'};">
                       <div style="width:${fp}%;height:100%;background:${getTheme().progressGradient};"></div>
                     </div>
@@ -7388,7 +7388,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
               ${activeItems.map(item => `
               <div style="display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;background:${isDarkMode ? 'rgba(99,102,241,0.1)' : 'white'};border:1px solid ${isDarkMode ? 'rgba(99,102,241,0.2)' : '#c7d2fe'};">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <span style="font:600 12px system-ui;color:${isDarkMode ? '#e2e8f0' : '#1e293b'};flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.name}</span>
+                  <span style="font:600 12px system-ui;color:${isDarkMode ? '#e2e8f0' : '#1e293b'};flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(item.name)}</span>
                   <span style="font:700 11px system-ui;color:#6366f1;margin-left:8px;">${item.progress || 0}%</span>
                 </div>
                 <div style="width:100%;height:4px;border-radius:2px;overflow:hidden;background:${isDarkMode ? '#1f2937' : '#e0e7ff'};">
@@ -7560,7 +7560,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         const groupDonePercent = groupStats.total > 0 ? Math.round((groupStats.completed / groupStats.total) * 100) : 0;
         return `
-          <!-- GROUP: ${folderPath} -->
+          <!-- GROUP -->
           <div style="
             margin: 6px; border-radius: 10px; overflow: hidden;
             border: 1px solid ${isDarkMode ? '#1f2937' : '#e2e8f0'};
@@ -7574,13 +7574,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
               display: flex; align-items: center; gap: 10px;
             ">
               <span class="group-arrow" style="font-size:9px;color:#6b7280;transition:transform 0.2s;transform:rotate(90deg);">▶</span>
-              <input type="checkbox" class="group-checkbox" data-group-path="${folderPath}"
+              <input type="checkbox" class="group-checkbox" data-group-path="${escapeHtml(folderPath)}"
                 ${allSelected ? 'checked' : ''}
                 onclick="event.stopPropagation();"
                 style="width:14px;height:14px;accent-color:${getTheme().primary};cursor:pointer;flex-shrink:0;">
               <div style="flex:1;min-width:0;">
                 <div style="font:600 13px system-ui;color:${isDarkMode ? '#f1f5f9' : '#1e293b'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                  ${folderPath.split('/').pop() || folderPath}
+                  ${escapeHtml(folderPath.split('/').pop() || folderPath)}
                 </div>
                 <div style="font:11px system-ui;color:${isDarkMode ? '#64748b' : '#94a3b8'};margin-top:2px;display:flex;gap:8px;align-items:center;">
                   <span>${groupStats.total} file${groupStats.total !== 1 ? 's' : ''}</span>
@@ -7593,7 +7593,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
                   <div style="width:${groupDonePercent}%;height:100%;background:${getTheme().progressGradient};transition:width 0.4s;"></div>
                 </div>` : ''}
               </div>
-              <button class="download-group-btn" data-group-path="${folderPath}" onclick="event.stopPropagation();" style="
+              <button class="download-group-btn" data-group-path="${escapeHtml(folderPath)}" onclick="event.stopPropagation();" style="
                 padding: 5px 11px; border-radius: 6px; flex-shrink:0;
                 border: 1.5px solid ${getTheme().primary};
                 background: ${isDarkMode ? getTheme().shadow.replace('0.3', '0.1') : '#ecfdf5'};
@@ -7644,11 +7644,11 @@ Note: If blocked, right-click → Open, or run in Terminal:
                     <div style="flex:1;min-width:0;">
                       <!-- Title -->
                       <div style="font:600 12px/1.3 system-ui;color:${isDarkMode ? '#e2e8f0' : '#1e293b'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                        ${item.name}
+                        ${escapeHtml(item.name)}
                       </div>
                       <!-- Subtitle -->
                       <div style="font:10px system-ui;color:${isDarkMode ? '#64748b' : '#94a3b8'};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                        ${item.downloadInfo.folderPath}${item.size > 0 ? ` &bull; <strong>${formatFileSize(item.size)}</strong>` : ''}
+                        ${escapeHtml(item.downloadInfo.folderPath)}${item.size > 0 ? ` &bull; <strong>${formatFileSize(item.size)}</strong>` : ''}
                       </div>
                       <!-- Progress bar (only when downloading/paused) -->
                       ${showBar ? `
@@ -7674,7 +7674,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
                       ${isError && item.error ? `
                       <div style="margin-top:4px;font:10px system-ui;color:#f87171;display:flex;align-items:center;gap:4px;">
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                        ${item.error}
+                        ${escapeHtml(item.error)}
                       </div>` : ''}
                     </div>
 
@@ -9353,7 +9353,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     if (errorList && errors.length > 0) {
       errorList.innerHTML = errors.map(error => `
         <div style="color:#dc2626;font:12px system-ui,sans-serif;padding:4px 8px;background:#fef2f2;border-left:3px solid #dc2626;margin:2px 0;border-radius:4px;">
-          ${Icons.alert} ${error}
+          ${Icons.alert} ${escapeHtml(error)}
         </div>
       `).join('');
     }
@@ -9717,7 +9717,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-desc">Recommended 2-3 to prevent browser network saturation.</div>
                 </div>
                 <div class="setting-control" style="max-width: 120px;">
-                  <input type="number" id="concurrent-downloads" class="modern-input" value="${currentSettings.concurrentDownloads || 3}" min="1" max="5">
+                  <input type="number" id="concurrent-downloads" class="modern-input" value="${escapeHtml(currentSettings.concurrentDownloads || 3)}" min="1" max="5">
                 </div>
               </div>
               
@@ -9909,18 +9909,18 @@ animation: fadeIn 0.3s ease;
                   <div style="display: flex; gap: 24px; align-items: center; margin-bottom: 16px;">
                     <div style="flex: 1;">
                       <label style="color: ${isDarkMode ? '#9ca3af' : '#64748b'}; font-size: 12px; margin-bottom: 4px; display: block;">Min Floor</label>
-                      <input type="number" id="filter-size-min" class="modern-input" value="${currentSettings.filterOptions?.minFileSize || ''}" placeholder="0 GB" min="0" step="0.1">
+                      <input type="number" id="filter-size-min" class="modern-input" value="${escapeHtml(currentSettings.filterOptions?.minFileSize || '')}" placeholder="0 GB" min="0" step="0.1">
                     </div>
                     <div style="flex: 1;">
                       <label style="color: ${isDarkMode ? '#9ca3af' : '#64748b'}; font-size: 12px; margin-bottom: 4px; display: block;">Max Ceiling</label>
-                      <input type="number" id="filter-size-max" class="modern-input" value="${currentSettings.filterOptions?.maxFileSize || ''}" placeholder="No Limit" min="0" step="0.1">
+                      <input type="number" id="filter-size-max" class="modern-input" value="${escapeHtml(currentSettings.filterOptions?.maxFileSize || '')}" placeholder="No Limit" min="0" step="0.1">
                     </div>
                   </div>
                   
                   <!-- Sliders overlay -->
                   <div style="position: relative; height: 30px;">
-                    <input type="range" id="filter-size-slider-min" min="0" max="20" step="0.5" value="${currentSettings.filterOptions?.minFileSize || 0}" style="position: absolute; top: 0; left: 0; width: 100%; height: 6px; background: ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 3px; outline: none; -webkit-appearance: none; accent-color: ${getTheme().primary}; point-events: none; z-index: 2;">
-                    <input type="range" id="filter-size-slider-max" min="0" max="20" step="0.5" value="${currentSettings.filterOptions?.maxFileSize || 20}" style="position: absolute; top: 12px; left: 0; width: 100%; height: 6px; background: ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 3px; outline: none; -webkit-appearance: none; accent-color: #ef4444; z-index: 1;">
+                    <input type="range" id="filter-size-slider-min" min="0" max="20" step="0.5" value="${escapeHtml(currentSettings.filterOptions?.minFileSize || 0)}" style="position: absolute; top: 0; left: 0; width: 100%; height: 6px; background: ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 3px; outline: none; -webkit-appearance: none; accent-color: ${getTheme().primary}; point-events: none; z-index: 2;">
+                    <input type="range" id="filter-size-slider-max" min="0" max="20" step="0.5" value="${escapeHtml(currentSettings.filterOptions?.maxFileSize || 20)}" style="position: absolute; top: 12px; left: 0; width: 100%; height: 6px; background: ${isDarkMode ? '#374151' : '#e2e8f0'}; border-radius: 3px; outline: none; -webkit-appearance: none; accent-color: #ef4444; z-index: 1;">
                   </div>
                 </div>
               </div>
@@ -10059,7 +10059,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-desc">aria2's JSON-RPC port. Default is 6800.</div>
                 </div>
                 <div class="setting-control" style="max-width: 140px;">
-                  <input type="number" id="remote-port" class="modern-input" value="${currentSettings.remotePort || 6800}" min="1" max="65535">
+                  <input type="number" id="remote-port" class="modern-input" value="${escapeHtml(currentSettings.remotePort || 6800)}" min="1" max="65535">
                 </div>
               </div>
 
@@ -10102,7 +10102,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-desc">Keep at 1 unless you own the source server too — more connections can trip rate limits on someone else's box.</div>
                 </div>
                 <div class="setting-control" style="max-width: 140px;">
-                  <input type="number" id="remote-max-connections" class="modern-input" value="${currentSettings.remoteMaxConnections || 1}" min="1" max="16">
+                  <input type="number" id="remote-max-connections" class="modern-input" value="${escapeHtml(currentSettings.remoteMaxConnections || 1)}" min="1" max="16">
                 </div>
               </div>
 
@@ -10197,7 +10197,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-desc">Target TCP Port. Do not change unless manually configured in JD Advanced Settings.</div>
                 </div>
                 <div class="setting-control" style="width: 140px; display: flex; gap: 8px; flex-direction: column;">
-                  <input type="number" id="jdownloader-port" class="modern-input" value="${currentSettings.jdownloaderPort || 9666}" min="1" max="65535">
+                  <input type="number" id="jdownloader-port" class="modern-input" value="${escapeHtml(currentSettings.jdownloaderPort || 9666)}" min="1" max="65535">
                   <button id="test-jdownloader" style="width: 100%; padding: 8px; background: transparent; border: 1px solid ${getTheme().primary}; color: ${getTheme().primary}; border-radius: 6px; cursor: pointer; font: 500 12px system-ui;">Test Net Bind</button>
                 </div>
               </div>
@@ -10228,7 +10228,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-title">TV Episode File Structure</div>
                   <div class="setting-desc" style="margin-bottom: 8px;">Macro string structure when renaming TV Series files.</div>
                 </div>
-                <input type="text" id="filename-template-episode" class="modern-input" value="${currentSettings.filenameTemplateEpisode || '{Series} - S{season}E{episode} - {Title}'}">
+                <input type="text" id="filename-template-episode" class="modern-input" value="${escapeHtml(currentSettings.filenameTemplateEpisode || '{Series} - S{season}E{episode} - {Title}')}">
               </div>
               
               <div class="setting-row" style="flex-direction: column; align-items: stretch; gap: 8px; border-bottom: none;">
@@ -10236,7 +10236,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-title">Theatrical Movie Structure</div>
                   <div class="setting-desc" style="margin-bottom: 8px;">Macro string structure when parsing Film objects.</div>
                 </div>
-                <input type="text" id="filename-template-movie" class="modern-input" value="${currentSettings.filenameTemplateMovie || '{Title} ({Year})'}">
+                <input type="text" id="filename-template-movie" class="modern-input" value="${escapeHtml(currentSettings.filenameTemplateMovie || '{Title} ({Year})')}">
               </div>
             </div>
 
@@ -10484,7 +10484,7 @@ animation: fadeIn 0.3s ease;
                   <div class="setting-desc">How often to poll for updates. Minimum 1 hour.</div>
                 </div>
                 <div class="setting-control">
-                  <input type="number" id="update-check-interval" class="modern-input" value="${currentSettings.updateCheckInterval || 24}" min="1" max="168" style="width: 80px; text-align: center;">
+                  <input type="number" id="update-check-interval" class="modern-input" value="${escapeHtml(currentSettings.updateCheckInterval || 24)}" min="1" max="168" style="width: 80px; text-align: center;">
                 </div>
               </div>
               <div class="setting-row" style="border-bottom: none;">
@@ -11755,8 +11755,8 @@ animation: fadeIn 0.3s ease;
             align-items: center;
           ">
             <div style="flex: 1;">
-              <div style="color: #1f2937; font: 14px system-ui, sans-serif;">${item.name}</div>
-              <div style="color: #6b7280; font: 12px system-ui, sans-serif;">${item.type} • ${item.date}</div>
+              <div style="color: #1f2937; font: 14px system-ui, sans-serif;">${escapeHtml(item.name)}</div>
+              <div style="color: #6b7280; font: 12px system-ui, sans-serif;">${escapeHtml(item.type)} • ${escapeHtml(item.date)}</div>
             </div>
             ${item.size ? `<div style="color: #6b7280; font: 12px system-ui, sans-serif;">${formatFileSize(item.size)}</div>` : ''}
           </div>
@@ -11828,7 +11828,11 @@ animation: fadeIn 0.3s ease;
                         cursor: pointer;
                         `;
 
-    notification.innerHTML = `${icons[type] || icons.info} ${message}`;
+    notification.innerHTML = icons[type] || icons.info;
+    const text = document.createElement('span');
+    text.style.whiteSpace = 'pre-line';
+    text.textContent = message;
+    notification.appendChild(text);
     notification.title = 'Click to dismiss';
     document.body.appendChild(notification);
 
@@ -11919,7 +11923,7 @@ animation: fadeIn 0.3s ease;
           margin: 0;
           color: #1f2937;
           font: 600 18px system-ui, sans-serif;
-        ">${title}</h3>
+        ">${escapeHtml(title)}</h3>
                         </div>
 
                         <div style="
@@ -11944,7 +11948,7 @@ animation: fadeIn 0.3s ease;
               border-radius: 50%;
               background: ${getTheme().primary};
             "></span>
-            ${detail}
+            ${escapeHtml(detail)}
           </div>
         `).join('')}
                         </div>
@@ -12098,7 +12102,7 @@ animation: fadeIn 0.3s ease;
             text-transform: uppercase; 
             letter-spacing: 0.05em; 
             color: ${isDark ? '#9ca3af' : '#6b7280'};
-          ">${typeLabels[type] || type}</h4>
+          ">${typeLabels[type] || escapeHtml(type)}</h4>
                           <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px;">
                             ${libs.map(lib => `
               <label style="
@@ -12112,8 +12116,8 @@ animation: fadeIn 0.3s ease;
                 transition: background 0.2s;
               " onmouseover="this.style.background='${isDark ? '#374151' : '#e5e7eb'}'" 
                 onmouseout="this.style.background='${isDark ? '#2a2a2a' : '#f3f4f6'}'">
-                <input type="checkbox" class="lib-checkbox" value="${lib.Id}" checked style="accent-color: ${getTheme().primary};">
-                <span style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${lib.Name}</span>
+                <input type="checkbox" class="lib-checkbox" value="${escapeHtml(lib.Id)}" checked style="accent-color: ${getTheme().primary};">
+                <span style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(lib.Name)}</span>
               </label>
             `).join('')}
                           </div>
@@ -13128,7 +13132,7 @@ animation: fadeIn 0.3s ease;
       const ownerBadge = s.owned ? ' (owned)' : ' (shared)';
       html += `<button data-idx="${i}" style="display:block;width:100%;padding:12px 16px;margin-bottom:8px;background:#252545;border:1px solid #333;border-radius:8px;color:#e0e0e0;cursor:pointer;text-align:left;font-size:14px;transition:border-color 0.2s;"
         onmouseover="this.style.borderColor='${theme.primary}'" onmouseout="this.style.borderColor='#333'">
-        <strong>${s.name}</strong><span style="color:#888;font-size:12px;">${ownerBadge}</span>
+        <strong>${escapeHtml(s.name)}</strong><span style="color:#888;font-size:12px;">${ownerBadge}</span>
       </button>`;
     });
 
