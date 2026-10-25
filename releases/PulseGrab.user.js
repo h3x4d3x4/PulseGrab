@@ -4291,7 +4291,6 @@ save-session-interval=60
 
 enable-rpc=true
 rpc-listen-all=true
-rpc-allow-origin-all=true
 rpc-listen-port=${state.port}
 rpc-secret=${state.secret}
 
