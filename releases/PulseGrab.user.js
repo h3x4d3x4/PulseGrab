@@ -1361,7 +1361,11 @@
     const emulateClient = Settings.get('emulateClient');
     const prefix = apiPrefix(); // '/emby' for Emby, '' for Jellyfin
 
-    if (item.MediaSources && item.MediaSources.length > 0) {
+    // Photos, books etc. have no stream endpoint; the plain Download endpoint serves the file.
+    // (An unset MediaType is treated as video so older code paths keep working.)
+    const isAudio = item.MediaType === 'Audio' || item.Type === 'Audio';
+    const isOtherMedia = !isAudio && item.MediaType && item.MediaType !== 'Video';
+    if (!isOtherMedia && item.MediaSources && item.MediaSources.length > 0) {
       const source = item.MediaSources[0];
       const container = (source.Container || item.Container || 'mkv').toLowerCase();
       const tagParam = source.ETag ? `&Tag=${source.ETag}` : '';
@@ -1374,10 +1378,11 @@
 
       let streamParams = `&MediaSourceId=${source.Id}${tagParam}${clientParams}&PlayMethod=DirectPlay&Copy=true&AudioCodec=copy&VideoCodec=copy`;
 
+      const streamRoot = isAudio ? 'Audio' : 'Videos';
       if (bypassMode === 'directplay') {
-        return `${server}${prefix}/Videos/${item.Id}/stream.${container}?api_key=${token}&Static=true${streamParams}`;
+        return `${server}${prefix}/${streamRoot}/${item.Id}/stream.${container}?api_key=${token}&Static=true${streamParams}`;
       } else if (bypassMode === 'remux') {
-        return `${server}${prefix}/Videos/${item.Id}/stream.${container}?api_key=${token}&Static=false${streamParams}`;
+        return `${server}${prefix}/${streamRoot}/${item.Id}/stream.${container}?api_key=${token}&Static=false${streamParams}`;
       }
     }
 
@@ -1482,6 +1487,7 @@
     } else if (!filename.includes('.')) {
       if (item.MediaType === 'Video') filename += '.mkv';
       else if (item.MediaType === 'Audio') filename += '.mp3';
+      else if (item.MediaType === 'Photo' || item.Type === 'Photo') filename += '.jpg';
       else filename += '.mp4';
     }
 
