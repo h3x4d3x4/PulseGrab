@@ -43,7 +43,7 @@ test('escapeHtml', () => {
   assert.equal(H.escapeHtml(0), '0');
 });
 
-test('redactToken: MediaBrowser Token="..." header', { todo: 'bug: the generic `token=` rule fires first and eats only `Token=`, so the quoted value leaks (`Token=***"abc123"`)' }, () => {
+test('redactToken: MediaBrowser Token="..." header', () => {
   assert.ok(!H.redactToken('MediaBrowser Client="x", Token="abc123", Version="1"').includes('abc123'));
 });
 
@@ -206,7 +206,7 @@ test('buildDownloadInfo: movie with and without year', () => {
   assert.equal(a.filename, 'Dune (2021).mkv');
   assert.equal(a.folderPath, 'Movies/Dune (2021)');
   const b = info({ Type: 'Movie', Name: 'Dune', Container: 'mkv' });
-  assert.equal(b.filename, 'Dune ().mkv', 'documents current behaviour: empty year leaves "()"');
+  assert.equal(b.filename, 'Dune.mkv', 'empty year must not leave "()"');
   assert.equal(b.folderPath, 'Movies/Dune');
 });
 

@@ -33,9 +33,9 @@ run "$ST/TV Shows/X/S1/e1.mkv"; rc=$?
 if [ $rc -eq 0 ] && [ "$(cat "$LIB/TV Shows/X/S1/e1.mkv")" = new ] && [ "$(cat "$ST/.conflicts/TV Shows/X/S1/e1.mkv")" = newer ]; then ok "conflict parked in .conflicts"; else bad "conflict (rc=$rc)"; fi
 
 # 3. outside staging: exit 0, nothing touched
-echo keep > "$T/outside.mkv"; before=$(find "$LIB" "$T/outside.mkv" -type f | sort | xargs cksum)
+echo keep > "$T/outside.mkv"; before=$(find "$LIB" "$T/outside.mkv" -type f -exec cksum {} + | sort)
 run "$T/outside.mkv"; rc=$?
-after=$(find "$LIB" "$T/outside.mkv" -type f | sort | xargs cksum)
+after=$(find "$LIB" "$T/outside.mkv" -type f -exec cksum {} + | sort)
 if [ $rc -eq 0 ] && [ "$before" = "$after" ]; then ok "outside path ignored"; else bad "outside path (rc=$rc)"; fi
 
 # 4. '..' refused

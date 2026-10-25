@@ -1209,8 +1209,9 @@
   function redactToken(str) {
     if (typeof str !== 'string') return str;
     return str
-      .replace(/(api_?key|x-plex-token|token)=[^&\s"'<>]*/gi, '$1=***')
+      // Quoted header form first, or the generic rule eats `Token=` and leaves the value.
       .replace(/(Token\s*=\s*")[^"]*"/gi, '$1***"')
+      .replace(/(api_?key|api-key|x-plex-token|token)=(?!")[^&\s"'<>]*/gi, '$1=***')
       .replace(/\/t_[0-9a-f]+_/gi, '/t_***_');
   }
 
@@ -1446,7 +1447,13 @@
           return val !== undefined ? String(val).padStart(2, '0') : '';
         }
         return data[lowerKey] !== undefined ? data[lowerKey] : match;
-      });
+      })
+        // A missing value leaves "Dune ()" or "Show - S01E02 - " behind; tidy that up.
+        .replace(/\s*[([]\s*[)\]]/g, '')
+        .replace(/(\s*-\s*)+$/g, '')
+        .replace(/^(\s*-\s*)+/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
     };
 
     // Gather Metadata
@@ -4530,7 +4537,7 @@ case "$FILE" in
     exit 0 ;;
 esac
 
-REL="\${FILE#$STAGING/}"
+REL="\${FILE#"$STAGING"/}"
 
 # Refuse anything with a ".." segment or an absolute path: a crafted filename
 # must never be able to write outside the library.
