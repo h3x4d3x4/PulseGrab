@@ -1221,6 +1221,38 @@
     URL.revokeObjectURL(url);
   }
 
+  // ---------- Streaming to disk (File System Access API) ----------
+  // Chromium on a secure page can write straight into a folder the user picks,
+  // so a 20 GB file never has to fit in memory. Everywhere else (Firefox,
+  // Safari, plain-http media servers) the Download Manager keeps buffering into
+  // a Blob, which is fine for ordinary file sizes.
+  const BLOB_WARN_BYTES = 2 * 1024 * 1024 * 1024;
+
+  function directoryPicker() {
+    const win = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+    const picker = win.showDirectoryPicker || window.showDirectoryPicker;
+    return (typeof picker === 'function' && window.isSecureContext) ? picker.bind(win) : null;
+  }
+
+  // Walk/create "TV Shows/Show/Season 01/file.mkv" under the picked folder.
+  // Segments come from buildDownloadInfo(), which already strips separators.
+  async function fileHandleForPath(rootDir, relativePath) {
+    const parts = String(relativePath || '').split('/').filter(part => part && part !== '.' && part !== '..');
+    if (!parts.length) throw new Error('Empty file path');
+    let dir = rootDir;
+    for (const part of parts.slice(0, -1)) {
+      dir = await dir.getDirectoryHandle(part, { create: true });
+    }
+    return dir.getFileHandle(parts[parts.length - 1], { create: true });
+  }
+
+  async function writeBlobToDir(rootDir, relativePath, blob) {
+    const handle = await fileHandleForPath(rootDir, relativePath);
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  }
+
   function escapeHtml(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -7231,7 +7263,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           item.error = null;
           renderQueue();
           saveState();
-          downloadItem(index);
+          ensureSaveDir().then(() => downloadItem(index));
           break;
 
         case 'pause':
@@ -7262,6 +7294,9 @@ Note: If blocked, right-click → Open, or run in Terminal:
           item.status = 'pending';
           item.progress = 0;
           item.error = null;
+          item._writtenBytes = 0;
+          item._savedChunks = null;
+          item._savedReceivedLength = 0;
           renderQueue();
           updateStats();
           saveState();
@@ -7287,6 +7322,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         case 'retry':
           logDebug(`[DownloadManager] Retrying item ${index}: ${item.name}`);
+          item._writtenBytes = 0;
           item.status = 'pending';
           item.error = null;
           item.progress = 0;
@@ -7304,10 +7340,11 @@ Note: If blocked, right-click → Open, or run in Terminal:
           item.status = 'pending';
           item.progress = 0;
           item.error = null;
+          item._writtenBytes = 0;
           renderQueue();
           saveState();
           downloadSingleItem = true;
-          downloadItem(index);
+          ensureSaveDir().then(() => downloadItem(index));
           break;
 
         case 'dismiss':
@@ -7360,11 +7397,15 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
       // Note: HTTP Range requests let us resume from where we paused.
       // Check if we have saved chunks from a previous pause.
+      // Two resume sources: bytes already written to the picked folder, or
+      // chunks still held in memory from a pause on the Blob path.
+      const streamDir = saveDir;
       const savedChunks = item._savedChunks || [];
-      const resumeFrom = item._savedReceivedLength || 0;
-      const isResume = savedChunks.length > 0 && resumeFrom > 0;
+      const resumeFrom = streamDir ? (item._writtenBytes || 0) : (item._savedReceivedLength || 0);
+      const isResume = resumeFrom > 0 && (streamDir ? true : savedChunks.length > 0);
       item._savedChunks = null;
       item._savedReceivedLength = 0;
+      let writable = null;
 
       // Initialise item state for this download run
       item.status = 'downloading';
@@ -7400,12 +7441,23 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         const reader = response.body.getReader();
         const contentLength = +response.headers.get('Content-Length') || 0;
+        const resumed = isResume && response.status === 206;
         // Total size = what server is sending + what we already have
-        const totalLength = isResume && response.status === 206 ? resumeFrom + contentLength : contentLength;
+        const totalLength = resumed ? resumeFrom + contentLength : contentLength;
 
         // If server didn't support range, start fresh
-        let chunks = (isResume && response.status === 206) ? savedChunks : [];
-        let receivedLength = (isResume && response.status === 206) ? resumeFrom : 0;
+        let chunks = (resumed && !streamDir) ? savedChunks : [];
+        let receivedLength = resumed ? resumeFrom : 0;
+
+        if (streamDir) {
+          const handle = await fileHandleForPath(streamDir, item.downloadInfo.fullPath);
+          writable = await handle.createWritable({ keepExistingData: resumed });
+          if (resumed) await writable.seek(resumeFrom);
+          item._writtenBytes = receivedLength;
+        } else if (totalLength > BLOB_WARN_BYTES && !item._blobWarned) {
+          item._blobWarned = true;
+          showNotification(`"${item.name}" is ${formatFileSize(totalLength)}. This browser has to hold it in memory until it finishes — for files this big, Send to My Server, JDownloader or the wget script are safer.`, 'warning', 9000);
+        }
 
         // Keep live references so the abort handler can snapshot them on pause
         item._liveChunks = chunks;
@@ -7416,7 +7468,8 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
         while (true) {
           if (isPaused) {
-            // Global pause-all: save progress for range-resume
+            // Global pause-all: keep what we have for range-resume
+            if (writable) { await writable.close(); writable = null; }
             item._savedChunks = chunks.slice(); // snapshot
             item._savedReceivedLength = receivedLength;
             item._liveChunks = null;
@@ -7430,8 +7483,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
           const { done, value } = await reader.read();
           if (done) break;
 
-          chunks.push(value);
+          if (writable) {
+            await writable.write(value);
+          } else {
+            chunks.push(value);
+          }
           receivedLength += value.length;
+          if (writable) item._writtenBytes = receivedLength;
 
           // Update progress and speed
           const now = Date.now();
@@ -7476,11 +7534,9 @@ Note: If blocked, right-click → Open, or run in Terminal:
           }
         }
 
-        // Create and download blob
         item._liveChunks = null;
         item._savedChunks = null;
         item._savedReceivedLength = 0;
-        const blob = new Blob(chunks);
 
         // Try to get filename from Content-Disposition header, fall back to our generated filename
         let filename = item.downloadInfo.filename;
@@ -7496,7 +7552,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
           }
         }
 
-        saveBlob(blob, filename);
+        if (writable) {
+          // Streamed: the file is already in the picked folder under its library path.
+          await writable.close();
+          writable = null;
+          item._writtenBytes = 0;
+        } else {
+          saveBlob(new Blob(chunks), filename);
+        }
 
         item.status = 'completed';
         item.progress = 100;
@@ -7510,7 +7573,13 @@ Note: If blocked, right-click → Open, or run in Terminal:
               // <a download> is ignored cross-origin, so fetch the (small) file and save the blob
               const subResp = await fetch(sub.url);
               if (!subResp.ok) throw new Error(`HTTP ${subResp.status}`);
-              saveBlob(await subResp.blob(), sub.filename);
+              const subBlob = await subResp.blob();
+              if (streamDir) {
+                const folder = item.downloadInfo.folderPath;
+                await writeBlobToDir(streamDir, folder ? `${folder}/${sub.filename}` : sub.filename, subBlob);
+              } else {
+                saveBlob(subBlob, sub.filename);
+              }
               await new Promise(r => setTimeout(r, 500)); // Small delay between downloads
             } catch (e) {
               console.warn('Failed to download subtitle:', sub.filename, e);
@@ -7544,6 +7613,15 @@ Note: If blocked, right-click → Open, or run in Terminal:
       } catch (error) {
         // Remove from active downloads on error
         activeDownloads.delete(index);
+
+        // Streaming: a pause keeps the bytes written so far (close commits them);
+        // a stop or a real error throws the partial file away.
+        if (writable) {
+          const keep = error.name === 'AbortError' && (item.status === 'paused' || !userAbortedIndices.has(index));
+          try { await (keep ? writable.close() : writable.abort()); } catch (e) { /* already closed */ }
+          if (!keep) item._writtenBytes = 0;
+          writable = null;
+        }
 
         if (error.name === 'AbortError') {
           // If abort was user-initiated (pause/stop button), keep the status the action handler already set
@@ -7658,14 +7736,31 @@ Note: If blocked, right-click → Open, or run in Terminal:
       userAbortedIndices.clear();
     }
 
+    // Folder that downloads stream into, picked once per Download Manager
+    // session. null = buffer in memory and save through the browser instead.
+    let saveDir = null;
+    let saveDirAsked = false;
+
+    // Must be called synchronously from a click: the picker needs the gesture.
+    function ensureSaveDir() {
+      const picker = directoryPicker();
+      if (saveDir || saveDirAsked || !picker) return Promise.resolve(saveDir);
+      saveDirAsked = true;
+      showNotification('Choose a folder — files stream straight into it, sorted into Movies / TV Shows / Music. Cancel to use normal browser downloads.', 'info', 7000);
+      return picker({ id: 'pulsegrab-downloads', mode: 'readwrite' })
+        .then(dir => { saveDir = dir; return dir; })
+        .catch(() => null);
+    }
+
     // Button handlers
-    manager.querySelector('#start-all').addEventListener('click', () => {
+    manager.querySelector('#start-all').addEventListener('click', async () => {
       const hasSelection = downloadQueue.some(i => i.selected && i.status !== 'completed');
       if (hasSelection) {
         manager.querySelector('#download-selected').click();
         return;
       }
 
+      await ensureSaveDir();
       isPaused = false;
       downloadOnlySelected = false;
 
@@ -7721,6 +7816,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     });
 
     manager.querySelector('#download-selected').addEventListener('click', async () => {
+      const pickedDir = ensureSaveDir();
       const selectedIndices = downloadQueue
         .map((item, index) => ({ item, index }))
         .filter(({ item }) => item.selected && item.status !== 'completed')
@@ -7732,6 +7828,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       }
 
       logDebug(`[DownloadManager] Starting ${selectedIndices.length} selected items`);
+      await pickedDir;
       isPaused = false;
       downloadOnlySelected = true; // Enable selected-only mode
 
