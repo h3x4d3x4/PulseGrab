@@ -569,7 +569,7 @@
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
           <span style="font-size:18px;">🚀</span>
           <strong style="font-size:14px;">PulseGrab v${escapeHtml(this._lastResult.version)} Available</strong>
-          <button id="pulsegrab-dismiss-update" style="margin-left:auto; background:none; border:none; cursor:pointer; font-size:18px; color:${isDarkMode ? '#888' : '#999'}; padding:0 4px;">&times;</button>
+          <button id="pulsegrab-dismiss-update" aria-label="Dismiss" style="margin-left:auto; background:none; border:none; cursor:pointer; font-size:18px; color:${isDarkMode ? '#888' : '#999'}; padding:0 4px;">&times;</button>
         </div>
         <div style="font-size:12px; color:${isDarkMode ? '#aaa' : '#666'}; margin-bottom:10px; line-height:1.4;">${changelogPreview}</div>
         <div style="display:flex; gap:8px;">
@@ -3476,7 +3476,7 @@
           <div style="display: flex; align-items: center; gap: 10px;">
             ${Icons.server}
             <h3 style="margin: 0; font: 700 17px system-ui; flex: 1;">${step.title}</h3>
-            <button id="wz-close" style="
+            <button id="wz-close" aria-label="Close" style="
               background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; border: none;
               color: ${isDarkMode ? '#d1d5db' : '#374151'};
               width: 26px; height: 26px; border-radius: 6px; cursor: pointer; line-height: 1;
@@ -3652,6 +3652,7 @@
     overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
     detachEscape = closeOnEscape(overlay, close);
     render();
   }
@@ -3777,7 +3778,7 @@
         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
           ${Icons.server}
           <h3 style="margin: 0; font: 700 16px system-ui; flex: 1;">Choose a folder on your server</h3>
-          <button id="pg-br-close" style="
+          <button id="pg-br-close" aria-label="Close" style="
             background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; border: none;
             color: ${isDarkMode ? '#d1d5db' : '#374151'};
             width: 26px; height: 26px; border-radius: 6px; cursor: pointer; line-height: 1;
@@ -3836,7 +3837,7 @@
             border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
             background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
           ">Cancel</button>
-          <button id="pg-br-pin" title="Pin to the top of every picker" style="
+          <button id="pg-br-pin" title="Pin to the top of every picker" aria-label="Pin to the top of every picker" style="
             padding: 11px 15px; border-radius: 9px; cursor: pointer; font: 600 13px system-ui;
             border: 1px solid ${isDarkMode ? '#3f3f46' : '#e5e7eb'};
             background: transparent; color: ${isDarkMode ? '#d1d5db' : '#374151'};
@@ -4023,6 +4024,7 @@
 
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
+    a11yDialog(overlay);
       render();
     });
   }
@@ -4557,6 +4559,18 @@ exit 0
   // Escape closes the topmost dialog only — the folder browser opens on top of
   // the destination picker, and closing both at once would lose the user's work.
   // Capture phase so it runs before the page's own Escape handlers.
+  // Dialog semantics + initial focus for a freshly mounted .pg-overlay.
+  function a11yDialog(overlay) {
+    const dialog = overlay.firstElementChild;
+    if (!dialog) return;
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const heading = dialog.querySelector('h1, h2, h3');
+    dialog.setAttribute('aria-label', (heading?.textContent || '').trim() || 'PulseGrab');
+    const first = dialog.querySelector('button, input:not([type="hidden"]), select, textarea');
+    if (first && !overlay.contains(document.activeElement)) first.focus();
+  }
+
   function closeOnEscape(overlay, closeFn) {
     overlay.dataset.pgOverlay = '1';
     const handler = event => {
@@ -4738,7 +4752,7 @@ exit 0
           <div style="display: flex; align-items: center; gap: 10px;">
             ${Icons.server}
             <h3 style="margin: 0; font: 700 16px system-ui; flex: 1;">Choose what to send to your server</h3>
-            <button id="ts-close" style="
+            <button id="ts-close" aria-label="Close" style="
               background: ${isDarkMode ? '#2a2a2a' : '#f3f4f6'}; border: none;
               color: ${isDarkMode ? '#d1d5db' : '#374151'};
               width: 26px; height: 26px; border-radius: 6px; cursor: pointer; line-height: 1;
@@ -4918,6 +4932,7 @@ exit 0
 
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
+    a11yDialog(overlay);
       detachEscape = closeOnEscape(overlay, () => close(null));
       render();
     });
@@ -5242,6 +5257,7 @@ exit 0
 
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
+    a11yDialog(overlay);
       refreshPreviews();
       inputs()[0].focus();
       runCollisionCheck().catch(() => {});
@@ -5319,7 +5335,7 @@ exit 0
       ">
         ${Icons.server || Icons.download}
         <span style="flex: 1;">Transferring to your server</span>
-        <button id="pg-remote-close" title="Hide panel" style="
+        <button id="pg-remote-close" title="Hide panel" aria-label="Hide panel" style="
           background: rgba(255,255,255,0.18); border: none; color: white;
           width: 24px; height: 24px; border-radius: 6px; cursor: pointer; line-height: 1;
         ">&times;</button>
@@ -6048,6 +6064,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
   }
 
   // ---------- QR Code Dialog ----------
@@ -6201,6 +6218,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
   }
 
   // ---------- Built-in Download Manager ----------
@@ -6422,7 +6440,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           </div>
         </div>
         <div style="display: flex; gap: 6px; align-items: center;">
-          <button id="toggle-view" title="Toggle Stats / List" style="
+          <button id="toggle-view" title="Toggle Stats / List" aria-label="Toggle Stats / List" style="
             padding: 6px 12px; border-radius: 7px;
             border: 1px solid ${isDarkMode ? '#374151' : '#e5e7eb'};
             background: ${isDarkMode ? '#1f2937' : '#f9fafb'};
@@ -6434,7 +6452,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             <span id="view-label">Stats</span>
           </button>
-          <button id="close-manager" title="Close" style="
+          <button id="close-manager" title="Close" aria-label="Close" style="
             width: 32px; height: 32px; border-radius: 7px;
             border: 1px solid ${isDarkMode ? '#374151' : '#e5e7eb'};
             background: ${isDarkMode ? '#1f2937' : '#f9fafb'};
@@ -6494,7 +6512,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         " onmouseover="this.style.background='${isDarkMode ? 'rgba(139,92,246,0.22)' : '#ede9fe'}'" onmouseout="this.style.background='${isDarkMode ? 'rgba(139,92,246,0.12)' : '#faf5ff'}'">
           ${Icons.download} Selected
         </button>
-        <button id="retry-failed" title="Retry Failed" style="
+        <button id="retry-failed" title="Retry Failed" aria-label="Retry Failed" style="
           padding: 9px 10px; border-radius: 8px;
           border: 1px solid ${isDarkMode ? '#374151' : '#e5e7eb'};
           background: ${isDarkMode ? '#1f2937' : '#f9fafb'};
@@ -6502,7 +6520,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           cursor: pointer; display: flex; align-items: center; gap: 4px;
           font: 500 12px system-ui; transition: all 0.15s;
         ">${Icons.retry}</button>
-        <button id="clear-completed" title="Clear Completed" style="
+        <button id="clear-completed" title="Clear Completed" aria-label="Clear Completed" style="
           padding: 9px 10px; border-radius: 8px;
           border: 1px solid ${isDarkMode ? '#374151' : '#e5e7eb'};
           background: ${isDarkMode ? '#1f2937' : '#f9fafb'};
@@ -6510,7 +6528,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
           cursor: pointer; display: flex; align-items: center; gap: 4px;
           font: 500 12px system-ui; transition: all 0.15s;
         ">${Icons.trash}</button>
-        <button id="cancel-all" title="Cancel All" style="
+        <button id="cancel-all" title="Cancel All" aria-label="Cancel All" style="
           padding: 9px 10px; border-radius: 8px;
           border: 1px solid ${isDarkMode ? '#374151' : '#e5e7eb'};
           background: ${isDarkMode ? '#1f2937' : '#f9fafb'};
@@ -7131,7 +7149,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
                     <!-- Action buttons -->
                     <div style="flex-shrink:0;align-self:flex-start;display:flex;flex-direction:column;gap:4px;">
                       ${item.status === 'pending' ? `
-                        <button data-action="start" data-index="${itemIndex}" title="Start download" style="
+                        <button data-action="start" data-index="${itemIndex}" title="Start download" aria-label="Start download" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid ${getTheme().primary};
                           background:${isDarkMode ? getTheme().shadow.replace('0.3', '0.1') : '#ecfdf5'};
@@ -7140,14 +7158,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
                         "><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
                       ` : ''}
                       ${item.status === 'paused' ? `
-                        <button data-action="start" data-index="${itemIndex}" title="Resume download" style="
+                        <button data-action="start" data-index="${itemIndex}" title="Resume download" aria-label="Resume download" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid #6366f1;
                           background:${isDarkMode ? 'rgba(99,102,241,0.1)' : '#eef2ff'};
                           color:#6366f1;cursor:pointer;
                           display:flex;align-items:center;justify-content:center;transition:all 0.15s;
                         "><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg></button>
-                        <button data-action="stop" data-index="${itemIndex}" title="Stop and reset" style="
+                        <button data-action="stop" data-index="${itemIndex}" title="Stop and reset" aria-label="Stop and reset" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid #ef4444;
                           background:${isDarkMode ? 'rgba(239,68,68,0.1)' : '#fef2f2'};
@@ -7156,14 +7174,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
                         "><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg></button>
                       ` : ''}
                       ${item.status === 'downloading' ? `
-                        <button data-action="pause" data-index="${itemIndex}" title="Pause download" style="
+                        <button data-action="pause" data-index="${itemIndex}" title="Pause download" aria-label="Pause download" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid #f59e0b;
                           background:${isDarkMode ? 'rgba(245,158,11,0.1)' : '#fffbeb'};
                           color:#f59e0b;cursor:pointer;
                           display:flex;align-items:center;justify-content:center;transition:all 0.15s;
                         "><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg></button>
-                        <button data-action="stop" data-index="${itemIndex}" title="Stop and reset" style="
+                        <button data-action="stop" data-index="${itemIndex}" title="Stop and reset" aria-label="Stop and reset" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid #ef4444;
                           background:${isDarkMode ? 'rgba(239,68,68,0.1)' : '#fef2f2'};
@@ -7178,7 +7196,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
                           title="Download complete">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                         </div>
-                        <button data-action="redownload" data-index="${itemIndex}" title="Download again" style="
+                        <button data-action="redownload" data-index="${itemIndex}" title="Download again" aria-label="Download again" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid ${getTheme().primary};
                           background:transparent;
@@ -7190,14 +7208,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
                         </button>
                       ` : ''}
                       ${item.status === 'error' ? `
-                        <button data-action="retry" data-index="${itemIndex}" title="Retry download" style="
+                        <button data-action="retry" data-index="${itemIndex}" title="Retry download" aria-label="Retry download" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid #f59e0b;
                           background:${isDarkMode ? 'rgba(245,158,11,0.1)' : '#fffbeb'};
                           color:#f59e0b;cursor:pointer;
                           display:flex;align-items:center;justify-content:center;transition:all 0.15s;
-                        " title="Retry"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.47"/></svg></button>
-                        <button data-action="dismiss" data-index="${itemIndex}" title="Remove this item" style="
+                        "><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.47"/></svg></button>
+                        <button data-action="dismiss" data-index="${itemIndex}" title="Remove this item" aria-label="Remove this item" style="
                           width:28px;height:28px;border-radius:7px;
                           border:1.5px solid ${isDarkMode ? '#374151' : '#e5e7eb'};
                           background:transparent;
@@ -8283,6 +8301,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     // No need to call renderQueue() here - already called after setupHandlers() above
     overlay.appendChild(manager);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
 
     // Auto-start if there are actually resumeable downloads (has progress or was recently active)
     const hasResumeableDownloads = downloadQueue.some(i =>
@@ -8658,6 +8677,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     modal.appendChild(buttonContainer);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
 
     progressModal = overlay;
     return overlay;
@@ -10047,6 +10067,7 @@ animation: fadeIn 0.3s ease;
 
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
     settingsPanel = overlay;
     detachSettingsEscape = closeOnEscape(overlay, hideSettingsPanel);
   }
@@ -10601,7 +10622,7 @@ animation: fadeIn 0.3s ease;
                             </svg>
                             PulseGrab v${SCRIPT_VERSION}
                           </h3>
-                          <button id="close-about" style="
+                          <button id="close-about" aria-label="Close" style="
           background: none;
           border: none;
           color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
@@ -10730,6 +10751,7 @@ animation: fadeIn 0.3s ease;
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
   }
 
   function showWikiDialog() {
@@ -10780,7 +10802,7 @@ animation: fadeIn 0.3s ease;
                             </svg>
                             PulseGrab Wiki & Help
                           </h3>
-                          <button id="close-wiki" style="
+                          <button id="close-wiki" aria-label="Close" style="
           background: none;
           border: none;
           color: ${isDarkMode ? '#9ca3af' : '#6b7280'};
@@ -10956,6 +10978,7 @@ animation: fadeIn 0.3s ease;
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
   }
 
   function showHistoryDialog() {
@@ -11013,7 +11036,7 @@ animation: fadeIn 0.3s ease;
                             </svg>
                             Download History
                           </h3>
-                          <button id="close-history" style="
+                          <button id="close-history" aria-label="Close" style="
           background: none;
           border: none;
           color: #6b7280;
@@ -11088,6 +11111,7 @@ animation: fadeIn 0.3s ease;
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
   }
 
   function showNotification(message, type = 'info', duration = 4000) {
@@ -11349,6 +11373,7 @@ animation: fadeIn 0.3s ease;
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
 
     setTimeout(() => dialog.querySelector('#confirm-proceed').focus(), 100);
   }
@@ -11565,6 +11590,7 @@ animation: fadeIn 0.3s ease;
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
   }
 
   // Helper to inject filename directly into the directplay URL for universal bypass mapping.
@@ -12341,6 +12367,7 @@ animation: fadeIn 0.3s ease;
     dialog.innerHTML = html;
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
+    a11yDialog(overlay);
 
     const detachEscape = closeOnEscape(overlay, () => {
       overlay.remove();
