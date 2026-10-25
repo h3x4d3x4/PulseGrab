@@ -14651,9 +14651,12 @@ animation: fadeIn 0.3s ease;
 
       applyDarkMode();
       // Follow OS changes live while the setting is 'auto'.
-      window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
-        if (typeof Settings.get('darkMode') !== 'boolean') applyDarkMode();
-      });
+      if (!initialize._osWatch) {
+        initialize._osWatch = true;
+        window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
+          if (typeof Settings.get('darkMode') !== 'boolean') applyDarkMode();
+        });
+      }
       createButton();
       setupKeyboardShortcuts();
 
