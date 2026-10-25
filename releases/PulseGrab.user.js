@@ -185,6 +185,9 @@
   }
 
   // ---------- Configuration ----------
+  // One z-index for every overlay (browsers clamp above 2147483647), so stacking follows DOM order.
+  // Persistent non-modal widgets (transfer panel, settings button) use Z_TOP - 1 to stay under dialogs.
+  const Z_TOP = 2147483646;
   const CONFIG = {
     buttonId: "getDownloadLinksButton",
     settingsId: "pulseDlSettings",
@@ -240,7 +243,7 @@
       position: "fixed",
       bottom: "20px",
       right: "20px",
-      zIndex: "2147483647",
+      zIndex: String(Z_TOP),
       padding: "12px 16px",
       backgroundColor: "transparent", // Set dynamically by getTheme()
       color: "white",
@@ -554,7 +557,7 @@
       const banner = document.createElement('div');
       banner.id = 'pulsegrab-update-banner';
       banner.style.cssText = `
-        position: fixed; top: 12px; right: 12px; z-index: 2147483647;
+        position: fixed; top: 12px; right: 12px; z-index: ${Z_TOP};
         background: ${isDarkMode ? '#1a2332' : '#fff'}; color: ${isDarkMode ? '#e0e0e0' : '#1f2937'};
         border: 1px solid ${isDarkMode ? '#2d4a6f' : '#ddd'}; border-left: 4px solid #22c55e;
         border-radius: 8px; padding: 14px 18px; max-width: 360px;
@@ -3114,8 +3117,9 @@
     };
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.style.cssText = `
-      position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 2147483647;
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: ${Z_TOP};
       display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px);
     `;
 
@@ -3814,8 +3818,9 @@
       const mediaRoot = (Settings.get('destMediaRoot') || destMediaRoot(cachedDestLibraries()) || '').replace(/\/+$/, '');
 
       const overlay = document.createElement('div');
+      overlay.className = 'pg-overlay';
       overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 2147483647;
+        position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: ${Z_TOP};
         display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
       `;
 
@@ -4799,8 +4804,9 @@ exit 0
       let query = '';
 
       const overlay = document.createElement('div');
+      overlay.className = 'pg-overlay';
       overlay.style.cssText = `
-        position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 2147483647;
+        position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: ${Z_TOP};
         display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
       `;
 
@@ -5052,9 +5058,10 @@ exit 0
       const suggestions = [...new Set([...choices.map(choice => choice.folder), ...knownLibraryFolders()])];
 
       const overlay = document.createElement('div');
+      overlay.className = 'pg-overlay';
       overlay.style.cssText = `
         position: fixed; inset: 0; background: rgba(0,0,0,0.7);
-        z-index: 2147483647; display: flex; align-items: center; justify-content: center;
+        z-index: ${Z_TOP}; display: flex; align-items: center; justify-content: center;
         backdrop-filter: blur(4px);
       `;
 
@@ -5388,7 +5395,7 @@ exit 0
     const panel = document.createElement('div');
     panel.style.cssText = `
       position: fixed; bottom: 20px; right: 20px; width: 380px; max-width: calc(100vw - 40px);
-      z-index: 2147483646; border-radius: 14px; overflow: hidden;
+      z-index: ${Z_TOP - 1}; border-radius: 14px; overflow: hidden;
       background: ${isDarkMode ? '#1c1c1c' : '#ffffff'};
       border: 1px solid ${isDarkMode ? '#2a2a2a' : '#e5e7eb'};
       box-shadow: 0 12px 34px rgba(0,0,0,${isDarkMode ? '0.55' : '0.18'});
@@ -6128,6 +6135,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     const isDarkMode = Settings.get('darkMode');
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay pg-overlay-nav';
     overlay.style.cssText = `
       position: fixed;
       top: 0;
@@ -6135,7 +6143,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       right: 0;
       bottom: 0;
       background: rgba(0,0,0,0.7);
-      z-index: 2147483649;
+      z-index: ${Z_TOP};
       display: flex;
       align-items: center;
       justify-content: center;
@@ -6606,6 +6614,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
   // ---------- QR Code Dialog ----------
   function showQRDialog(qrDataJSON, itemCount) {
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.style.cssText = `
       position: fixed;
       top: 0;
@@ -6613,7 +6622,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       right: 0;
       bottom: 0;
       background: rgba(0,0,0,0.7);
-      z-index: 2147483650;
+      z-index: ${Z_TOP};
       display: flex;
       align-items: center;
       justify-content: center;
@@ -6799,6 +6808,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     }
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.style.cssText = `
       position: fixed;
       top: 0;
@@ -6806,7 +6816,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       right: 0;
       bottom: 0;
       background: rgba(0,0,0,0.85);
-      z-index: 2147483650;
+      z-index: ${Z_TOP};
       display: flex;
       align-items: center;
       justify-content: center;
@@ -8457,6 +8467,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     // ---------- NEW v6.61: Bypass Mode Modal ----------
     function showBypassModal() {
       const overlay = document.createElement('div');
+      overlay.className = 'pg-overlay';
       overlay.style.cssText = `
         position: fixed;
         top: 0;
@@ -8464,7 +8475,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         right: 0;
         bottom: 0;
         background: rgba(0,0,0,0.85);
-        z-index: 2147483655; /* Higher than manager */
+        z-index: ${Z_TOP}; /* Higher than manager */
         display: flex;
       align-items: center;
       justify-content: center;
@@ -9039,7 +9050,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     const settingsStyles = {
       position: "fixed",
       ...positionStyles,
-      zIndex: "2147483647",
+      zIndex: String(Z_TOP - 1),
       padding: "8px",
       backgroundColor: theme.primary,
       color: "white",
@@ -9131,6 +9142,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     const isDarkMode = Settings.get('darkMode');
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.id = CONFIG.progressId;
     overlay.style.cssText = `
       position: fixed;
@@ -9139,7 +9151,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       right: 0;
       bottom: 0;
       background: rgba(0, 0, 0, 0.7);
-      z-index: 2147483648;
+      z-index: ${Z_TOP};
       display: flex;
       align-items: center;
       justify-content: center;
@@ -9436,6 +9448,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     const requestedPanel = typeof initialPanel === 'string' ? initialPanel : null;
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay pg-overlay-nav';
     overlay.style.cssText = `
 position: fixed;
 top: 0;
@@ -9443,7 +9456,7 @@ left: 0;
 right: 0;
 bottom: 0;
 background: rgba(0, 0, 0, 0.7);
-z-index: 2147483649;
+z-index: ${Z_TOP};
 display: flex;
       align-items: center;
       justify-content: center;
@@ -11244,6 +11257,7 @@ animation: fadeIn 0.3s ease;
     const isDarkMode = Settings.get('darkMode');
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.id = 'about-overlay';
     overlay.style.cssText = `
                         position: fixed;
@@ -11252,7 +11266,7 @@ animation: fadeIn 0.3s ease;
                         right: 0;
                         bottom: 0;
                         background: rgba(0,0,0,0.7);
-                        z-index: 2147483650;
+                        z-index: ${Z_TOP};
                         display: flex;
       align-items: center;
       justify-content: center;
@@ -11421,6 +11435,7 @@ animation: fadeIn 0.3s ease;
     const isDarkMode = Settings.get('darkMode');
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.id = 'wiki-overlay';
     overlay.style.cssText = `
                         position: fixed;
@@ -11429,7 +11444,7 @@ animation: fadeIn 0.3s ease;
                         right: 0;
                         bottom: 0;
                         background: rgba(0,0,0,0.7);
-                        z-index: 2147483650;
+                        z-index: ${Z_TOP};
                         display: flex;
       align-items: center;
       justify-content: center;
@@ -11651,6 +11666,7 @@ animation: fadeIn 0.3s ease;
     }
 
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.style.cssText = `
                         position: fixed;
                         top: 0;
@@ -11658,7 +11674,7 @@ animation: fadeIn 0.3s ease;
                         right: 0;
                         bottom: 0;
                         background: rgba(0,0,0,0.7);
-                        z-index: 2147483650;
+                        z-index: ${Z_TOP};
                         display: flex;
       align-items: center;
       justify-content: center;
@@ -11794,7 +11810,7 @@ animation: fadeIn 0.3s ease;
                         position: fixed;
                         top: 20px;
                         right: 20px;
-                        z-index: 2147483650;
+                        z-index: ${Z_TOP};
                         padding: 12px 16px;
                         border-radius: 8px;
                         color: white;
@@ -11838,6 +11854,7 @@ animation: fadeIn 0.3s ease;
 
   function showConfirmDialog(title, details, items, onConfirm, onCancel) {
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay pg-overlay-nav';
     overlay.style.cssText = `
                         position: fixed;
                         top: 0;
@@ -11845,7 +11862,7 @@ animation: fadeIn 0.3s ease;
                         right: 0;
                         bottom: 0;
                         background: rgba(0,0,0,0.7);
-                        z-index: 2147483649;
+                        z-index: ${Z_TOP};
                         display: flex;
       align-items: center;
       justify-content: center;
@@ -12017,6 +12034,7 @@ animation: fadeIn 0.3s ease;
   // NEW v1.0: Options dialog for whole server download
   function showServerDownloadOptionsDialog(libraries, onConfirm, onCancel) {
     const overlay = document.createElement('div');
+    overlay.className = 'pg-overlay';
     overlay.style.cssText = `
                         position: fixed;
                         top: 0;
@@ -12024,7 +12042,7 @@ animation: fadeIn 0.3s ease;
                         right: 0;
                         bottom: 0;
                         background: rgba(0,0,0,0.8);
-                        z-index: 2147483650;
+                        z-index: ${Z_TOP};
                         display: flex;
       align-items: center;
       justify-content: center;
@@ -13097,7 +13115,8 @@ animation: fadeIn 0.3s ease;
   function showPlexServerPicker(servers, onSelect, onCancel) {
     const theme = getTheme();
     const overlay = document.createElement('div');
-    overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;`;
+    overlay.className = 'pg-overlay';
+    overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:${Z_TOP};display:flex;align-items:center;justify-content:center;`;
 
     const dialog = document.createElement('div');
     dialog.style.cssText = `background:#1a1a2e;border-radius:12px;padding:24px;max-width:420px;width:90%;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.5);`;
@@ -15834,7 +15853,7 @@ animation: fadeIn 0.3s ease;
     // suppress the modal forever after SPA navigation.
     window.bypassModalShown = false;
     document.querySelectorAll('.pulse-dl-notification').forEach(n => n.remove());
-    document.querySelectorAll('[style*="2147483649"]').forEach(n => n.remove());
+    document.querySelectorAll('.pg-overlay-nav').forEach(n => n.remove());
     const settingsBtn = document.getElementById(CONFIG.settingsId);
     if (settingsBtn) {
       settingsBtn.remove();
