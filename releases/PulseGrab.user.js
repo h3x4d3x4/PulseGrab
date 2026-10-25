@@ -897,12 +897,14 @@
           }
         }
 
-        // Quality filter (resolution)
-        if (filters.minQuality && item.Width) {
+        // Quality filter (resolution). Emby/Jellyfin keep width on the video stream, not the item.
+        const width = item.Width ||
+          (item.MediaSources?.[0]?.MediaStreams || []).find(s => s.Type === 'Video')?.Width;
+        if (filters.minQuality && width) {
           const minWidths = { '720p': 1280, '1080p': 1920, '4K': 3840 };
           const minWidth = minWidths[filters.minQuality];
-          if (minWidth && item.Width < minWidth) {
-            logDebug(`[Filter] Excluding ${item.Name} - resolution ${item.Width}x${item.Height} < ${filters.minQuality}`);
+          if (minWidth && width < minWidth) {
+            logDebug(`[Filter] Excluding ${item.Name} - width ${width} < ${filters.minQuality}`);
             return false;
           }
         }
@@ -6132,7 +6134,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
 
   // ---------- Post-Scan Results Dialog ----------
-  function showResultsDialog(items, server, token, operationType) {
+  function showResultsDialog(items, server, token, operationType, filteredCount = 0) {
     const isDarkMode = Settings.get('darkMode');
 
     const overlay = document.createElement('div');
@@ -6271,7 +6273,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
               Scan Complete
             </h3>
             <p style="margin: 2px 0 0; font: 13px system-ui; color: ${isDarkMode ? '#9ca3af' : '#6b7280'};">
-              ${uniqueItems.length} item${uniqueItems.length === 1 ? '' : 's'} ready${items.length !== uniqueItems.length ? ` &bull; ${items.length - uniqueItems.length} dupes removed` : ''}
+              ${uniqueItems.length} item${uniqueItems.length === 1 ? '' : 's'} ready${items.length !== uniqueItems.length ? ` &bull; ${items.length - uniqueItems.length} dupes removed` : ''}${filteredCount > 0 ? ` &bull; ${filteredCount} filtered out` : ''}
             </p>
           </div>
         </div>
@@ -6593,7 +6595,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         // Re-open dialog with bypass enabled (this effectively refreshes it)
         // We need to wait a tick for cleanup to process
         setTimeout(() => {
-          showResultsDialog(items, server, token, operationType);
+          showResultsDialog(items, server, token, operationType, filteredCount);
         }, 100);
 
         showNotification('Bypass enabled! Using direct stream links.', 'success', 4000);
@@ -15393,6 +15395,18 @@ animation: fadeIn 0.3s ease;
 
       items = await processWithProgress(processFunction);
 
+      // Apply Settings → Filters & History once, for every processor
+      const scannedCount = items.length;
+      items = ContentFilter.apply(items);
+      if (Settings.get('skipDownloaded')) {
+        items = items.filter(item => !DownloadHistory.isDownloaded(item.Id));
+      }
+      const filteredCount = scannedCount - items.length;
+      if (scannedCount > 0 && items.length === 0) {
+        showNotification(`Your filters removed all ${scannedCount} items. Adjust them in Settings → Filters & History.`, 'error', 6000);
+        return;
+      }
+
       // Apply final deduplication at the top level
       items = deduplicateItems(items);
 
@@ -15400,14 +15414,8 @@ animation: fadeIn 0.3s ease;
       const shouldShowResultsDialog = Settings.get('showResultsDialog');
 
       if (shouldShowResultsDialog) {
-        // Mark items as downloaded if history is enabled
-        if (Settings.get('enableHistory') && items.length > 0) {
-          DownloadHistory.mark(items);
-          console.log(`[History] Marked ${items.length} items as downloaded`);
-        }
-
         // Show the post-scan results dialog
-        showResultsDialog(items, server, token, currentOperation);
+        showResultsDialog(items, server, token, currentOperation, filteredCount);
 
         // Log to console for debugging
         const outputFormat = Settings.get('outputFormat');
