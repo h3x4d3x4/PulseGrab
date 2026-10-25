@@ -11,6 +11,7 @@
 // @downloadURL  https://github.com/h3x4d3x4/PulseGrab/raw/main/releases/PulseGrab.user.js
 // @icon         https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/assets/pulsegrab_logo.png
 // @connect      api.github.com
+// @connect      raw.githubusercontent.com
 // @connect      api.jdownloader.org
 // @connect      localhost
 // @connect      127.0.0.1
@@ -230,7 +231,7 @@
       timeout: 15000,
       batchSize: 100,        // addUri calls per system.multicall request
       pollInterval: 2000,    // transfer panel refresh
-      preflightTimeout: 12000, // how long to wait for the probe item to prove reachability
+      preflightTimeout: 6000, // longest wait for the probe item to prove reachability (fast failures arrive in ~1 s)
       // Downloads land here first so the media server never indexes a partial file.
       // Leading dot => Emby/Jellyfin/Plex skip it during library scans.
       stagingDir: '.pulsegrab-incoming'
@@ -437,7 +438,11 @@
   const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info?.script?.version) || '1.0.6';
   const STORED_VERSION = GM_getValue('scriptVersion', null);
 
+  // Set when this load is the first one after an update, so we can say so.
+  let justUpdatedFrom = null;
+
   if (STORED_VERSION !== SCRIPT_VERSION) {
+    if (STORED_VERSION) justUpdatedFrom = STORED_VERSION;
     if (Settings.get('debugMode')) {
       console.log(`[PulseGrab] Version change detected: ${STORED_VERSION || 'none'} -> ${SCRIPT_VERSION}`);
       console.log('[PulseGrab] Clearing cached download manager state...');
@@ -451,22 +456,72 @@
   }
 
   // ---------- Update Checker ----------
+  // Version check: read just the header of the script that would be installed
+  // (a 2 KB Range request, ~40 ms) and, in parallel, the release notes from the
+  // GitHub API for the changelog. The header is the source of truth because
+  // it is exactly what the user manager will install.
+  //
+  // Install: a userscript can't replace itself — the final click is always the
+  // manager's own install page. What we control is everything around it:
+  // download the new version here with a real progress bar, check it, then open
+  // the direct raw URL (no github.com redirect) so the manager's own fetch of
+  // the same URL is served from a warm cache, and confirm after the reload.
+  const UPDATE_RAW_URL = 'https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/releases/PulseGrab.user.js';
+
+  // Keyframes shared by every indeterminate progress bar and spinner.
+  function ensureProgressStyles() {
+    if (document.getElementById('pulsegrab-progress-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'pulsegrab-progress-styles';
+    style.textContent = `
+      @keyframes pulsegrab-indeterminate { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+      @keyframes pulsegrab-spin { to { transform: rotate(360deg); } }`;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function gmRequest(options) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        timeout: 10000,
+        ...options,
+        onload: resolve,
+        onerror: () => reject(new Error('network error')),
+        ontimeout: () => reject(new Error('timed out'))
+      });
+    });
+  }
+
   const UpdateChecker = {
     REPO_OWNER: 'h3x4d3x4',
     REPO_NAME: 'PulseGrab',
     _lastResult: null,
 
-    async check(force = false) {
+    async _headerVersion() {
+      const response = await gmRequest({ url: UPDATE_RAW_URL, headers: { Range: 'bytes=0-2047' }, timeout: 8000 });
+      if (response.status !== 200 && response.status !== 206) throw new Error(`HTTP ${response.status}`);
+      const match = String(response.responseText || '').match(/^\/\/\s*@version\s+([0-9][0-9.]*)/m);
+      if (!match) throw new Error('no @version in the published script');
+      return match[1];
+    },
 
+    async _release() {
+      const response = await gmRequest({
+        url: `https://api.github.com/repos/${this.REPO_OWNER}/${this.REPO_NAME}/releases/latest`,
+        headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+        timeout: 8000
+      });
+      if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+      return JSON.parse(response.responseText);
+    },
+
+    async check(force = false) {
       if (!force) {
         const lastCheck = GM_getValue('pulse_lastUpdateCheck', 0);
         const interval = (Settings.get('updateCheckInterval') || 24) * 60 * 60 * 1000;
         if (Date.now() - lastCheck < interval) {
-          // Return cached result if within interval, but only if the cached
-          // version is actually newer than the currently-installed version.
-          // Otherwise the user has updated past it — drop the stale cache so
-          // we don't keep showing a "new version available" banner for a
-          // version that's already installed.
+          // Within the interval: reuse the cached result, but only while it is
+          // still newer than what's installed (the user may have updated since).
           const cachedRaw = GM_getValue('pulse_lastUpdateResult', null);
           if (cachedRaw) {
             try {
@@ -483,73 +538,42 @@
         }
       }
 
-      try {
-        const response = await new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: 'GET',
-            url: `https://api.github.com/repos/${this.REPO_OWNER}/${this.REPO_NAME}/releases/latest`,
-            headers: {
-              'Accept': 'application/vnd.github+json',
-              'X-GitHub-Api-Version': '2022-11-28'
-            },
-            timeout: 15000,
-            onload: resolve,
-            onerror: (err) => reject(new Error('Network error')),
-            ontimeout: () => reject(new Error('Request timed out'))
-          });
-        });
+      const [header, release] = await Promise.allSettled([this._headerVersion(), this._release()]);
+      const releaseData = release.status === 'fulfilled' ? release.value : null;
+      const latestVersion = header.status === 'fulfilled'
+        ? header.value
+        : (releaseData?.tag_name || '').replace(/^v/, '');
 
-        GM_setValue('pulse_lastUpdateCheck', Date.now());
+      if (!latestVersion) {
+        const reason = (header.reason || release.reason || {}).message || 'unknown error';
+        console.warn('[PulseGrab] Update check failed:', reason);
+        if (force) throw new Error(reason);
+        return null;
+      }
 
-        if (response.status === 401 || response.status === 403) {
-          console.warn('[PulseGrab] Update check: invalid or expired GitHub token');
-          this._lastResult = null;
-          GM_setValue('pulse_lastUpdateResult', null);
-          return null;
-        }
+      GM_setValue('pulse_lastUpdateCheck', Date.now());
 
-        if (response.status === 404) {
-          logDebug('Update check: no releases found');
-          this._lastResult = null;
-          GM_setValue('pulse_lastUpdateResult', null);
-          return null;
-        }
-
-        if (response.status !== 200) {
-          console.warn(`[PulseGrab] Update check failed: HTTP ${response.status}`);
-          return null;
-        }
-
-        const release = JSON.parse(response.responseText);
-        const latestVersion = release.tag_name.replace(/^v/, '');
-
-        if (this.isNewer(latestVersion, SCRIPT_VERSION)) {
-          const asset = release.assets?.find(a => a.name.endsWith('.user.js') || a.name.endsWith('.js'));
-          this._lastResult = {
-            version: latestVersion,
-            changelog: release.body || '',
-            assetId: asset?.id || null,
-            assetName: asset?.name || null,
-            htmlUrl: release.html_url,
-            publishedAt: release.published_at
-          };
-          GM_setValue('pulse_lastUpdateResult', JSON.stringify(this._lastResult));
-          return this._lastResult;
-        }
-
-        // Current version is up to date
+      if (!this.isNewer(latestVersion, SCRIPT_VERSION)) {
         this._lastResult = null;
         GM_setValue('pulse_lastUpdateResult', null);
         return null;
-      } catch (e) {
-        console.warn('[PulseGrab] Update check failed:', e.message);
-        return null;
       }
+
+      // The release notes belong to this version only if the tag matches.
+      const notesMatch = releaseData && (releaseData.tag_name || '').replace(/^v/, '') === latestVersion;
+      this._lastResult = {
+        version: latestVersion,
+        changelog: notesMatch ? (releaseData.body || '') : '',
+        htmlUrl: notesMatch ? releaseData.html_url : `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/releases`,
+        publishedAt: notesMatch ? releaseData.published_at : null
+      };
+      GM_setValue('pulse_lastUpdateResult', JSON.stringify(this._lastResult));
+      return this._lastResult;
     },
 
     isNewer(latest, current) {
-      const a = latest.split('.').map(Number);
-      const b = current.split('.').map(Number);
+      const a = String(latest).split('.').map(Number);
+      const b = String(current).split('.').map(Number);
       for (let i = 0; i < Math.max(a.length, b.length); i++) {
         if ((a[i] || 0) > (b[i] || 0)) return true;
         if ((a[i] || 0) < (b[i] || 0)) return false;
@@ -557,14 +581,96 @@
       return false;
     },
 
-    async installUpdate() {
-      // Navigate to the stable .user.js URL — Tampermonkey/Violentmonkey
-      // intercept any navigation to a .user.js URL and show their native install
-      // prompt. This avoids download-to-disk and avoids GM_xmlhttpRequest entirely
-      // (so no @connect entries are needed for redirect targets).
-      const url = `https://github.com/${this.REPO_OWNER}/${this.REPO_NAME}/raw/main/releases/PulseGrab.user.js`;
-      window.open(url, '_blank');
-      showNotification(`Opening installer for v${this._lastResult?.version || 'latest'}...`, 'info', 4000);
+    managerName() {
+      return (typeof GM_info !== 'undefined' && GM_info.scriptHandler) || 'your userscript manager';
+    },
+
+    // Runs the update inside `container` (the banner), step by step.
+    async installUpdate(container) {
+      const target = this._lastResult?.version || 'latest';
+      const manager = this.managerName();
+      const isDark = isDarkTheme();
+      const muted = isDark ? '#aaa' : '#666';
+
+      ensureProgressStyles();
+      const render = (html) => { if (container) container.innerHTML = html; };
+      const title = (text) => `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+          <strong style="font-size:14px; flex:1;">${text}</strong>
+          <button data-pg-update="close" aria-label="Close" style="background:none; border:none; cursor:pointer; font-size:18px; color:${muted}; padding:0 4px;">&times;</button>
+        </div>`;
+      const bar = (percent) => `
+        <div style="height:6px; border-radius:3px; overflow:hidden; background:${isDark ? '#2a2a2a' : '#e5e7eb'}; margin-bottom:8px;">
+          <div class="pg-update-fill" style="height:100%; width:${percent == null ? '35' : percent}%; background:#22c55e; border-radius:3px;
+            transition:width .2s ease; ${percent == null ? 'animation: pulsegrab-indeterminate 1.1s ease-in-out infinite;' : ''}"></div>
+        </div>`;
+      const wire = () => {
+        if (!container) return;
+        container.querySelectorAll('[data-pg-update]').forEach(button => button.addEventListener('click', () => {
+          const action = button.dataset.pgUpdate;
+          if (action === 'close') container.remove();
+          if (action === 'reload') location.reload();
+          if (action === 'open') openInstaller();
+          if (action === 'retry') this.installUpdate(container);
+        }));
+      };
+
+      const openInstaller = () => {
+        GM_setValue('pulse_pendingUpdate', target);
+        const tab = window.open(UPDATE_RAW_URL, '_blank');
+        render(`${title(`Almost done — confirm in ${escapeHtml(manager)}`)}
+          ${bar(100)}
+          <div style="font-size:12px; line-height:1.5; color:${muted}; margin-bottom:10px;">
+            ${tab ? `A ${escapeHtml(manager)} tab is opening — click <b>Update</b> there.` : 'Your browser blocked the new tab. Use the button below.'}
+            Then reload this page to start using v${escapeHtml(target)}.
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button data-pg-update="reload" style="flex:1; padding:7px 12px; background:#22c55e; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600;">Reload page</button>
+            <button data-pg-update="open" style="padding:7px 12px; background:transparent; color:inherit; border:1px solid ${isDark ? '#444' : '#d1d5db'}; border-radius:6px; cursor:pointer; font-size:13px;">Open installer again</button>
+          </div>`);
+        wire();
+      };
+
+      render(`${title(`Updating to v${escapeHtml(target)}`)}
+        ${bar(null)}
+        <div class="pg-update-status" style="font-size:12px; color:${muted};">Downloading…</div>`);
+      wire();
+
+      try {
+        const response = await gmRequest({
+          url: UPDATE_RAW_URL,
+          timeout: 60000,
+          onprogress: (event) => {
+            const fill = container && container.querySelector('.pg-update-fill');
+            const status = container && container.querySelector('.pg-update-status');
+            if (!fill || !status) return;
+            if (event.lengthComputable && event.total > 0) {
+              fill.style.animation = 'none';
+              fill.style.width = `${Math.min(100, (event.loaded / event.total) * 100).toFixed(0)}%`;
+              status.textContent = `Downloading… ${formatFileSize(event.loaded)} of ${formatFileSize(event.total)}`;
+            } else if (event.loaded) {
+              status.textContent = `Downloading… ${formatFileSize(event.loaded)}`;
+            }
+          }
+        });
+        const text = String(response.responseText || '');
+        const version = (text.match(/^\/\/\s*@version\s+([0-9][0-9.]*)/m) || [])[1];
+        if (response.status !== 200 || !text.includes('==UserScript==') || !version) {
+          throw new Error(response.status !== 200 ? `HTTP ${response.status}` : 'the download did not look like PulseGrab');
+        }
+        if (!this.isNewer(version, SCRIPT_VERSION)) {
+          throw new Error(`GitHub is still serving v${version} — its cache refreshes within 5 minutes, try again shortly`);
+        }
+        openInstaller();
+      } catch (error) {
+        render(`${title('Update failed')}
+          <div style="font-size:12px; line-height:1.5; color:#ef4444; margin-bottom:10px;">${escapeHtml(error.message)}</div>
+          <div style="display:flex; gap:8px;">
+            <button data-pg-update="retry" style="flex:1; padding:7px 12px; background:#22c55e; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600;">Try again</button>
+            <button data-pg-update="open" style="padding:7px 12px; background:transparent; color:inherit; border:1px solid ${isDark ? '#444' : '#d1d5db'}; border-radius:6px; cursor:pointer; font-size:13px;">Open installer anyway</button>
+          </div>`);
+        wire();
+      }
     },
 
     showUpdateBanner() {
@@ -612,9 +718,9 @@
         GM_setValue('pulse_dismissedUpdate', this._lastResult.version);
       });
 
+      // The banner turns into the update panel: progress, then the hand-off.
       banner.querySelector('#pulsegrab-install-update').addEventListener('click', () => {
-        this.installUpdate();
-        banner.remove();
+        this.installUpdate(banner);
       });
 
       banner.querySelector('#pulsegrab-view-release').addEventListener('click', () => {
@@ -2163,15 +2269,17 @@
   // Queue one item and watch it briefly. Catches the single most common failure:
   // the destination box cannot reach the source server (VPN-only, LAN-only, or
   // behind a firewall), which otherwise shows up as every file failing at once.
-  async function remotePreflight(task) {
+  async function remotePreflight(task, onTick = () => {}) {
     const [added] = await aria2AddBatch([task]);
     if (!added.gid) {
       throw new Error(`aria2 refused the first item: ${added.error}`);
     }
 
-    const deadline = Date.now() + CONFIG.remote.preflightTimeout;
+    const started = Date.now();
+    const deadline = started + CONFIG.remote.preflightTimeout;
     while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 700));
+      await new Promise(resolve => setTimeout(resolve, 300));
+      onTick(Math.round((Date.now() - started) / 1000));
 
       let status;
       try {
@@ -2209,6 +2317,9 @@
       // with nothing transferred yet — keeps polling until the deadline.
       if (status.status === 'complete') return added;
       if (status.status === 'active' && Number(status.completedLength) > 0) return added;
+      // Queued behind other downloads: it can't prove anything until a slot
+      // frees up, so don't make the user wait for it.
+      if (status.status === 'waiting' && Date.now() - started > 1500) return added;
     }
 
     // Still pending at the deadline: aria2 accepted it and isn't erroring, so
@@ -2256,6 +2367,7 @@
     // kills the second with "File exists, but a control file does not exist".
     // Easy to trigger by clicking Send twice, so drop anything already queued.
     let alreadyQueued = 0;
+    onProgress('Checking what is already queued…');
     try {
       const inFlight = await aria2Call('system.multicall', [[
         { methodName: 'aria2.tellActive', params: remoteParams([['gid', 'files']]) },
@@ -2286,8 +2398,11 @@
       logDebug('[MyServer] duplicate check skipped:', error.message);
     }
 
-    onProgress('Checking the route to the source server…');
-    const first = await remotePreflight(tasks[0]);
+    const probeHost = (() => { try { return new URL(tasks[0].url).host; } catch (e) { return 'the source server'; } })();
+    onProgress(`Checking ${remoteHost()} can reach ${probeHost}…`);
+    const first = await remotePreflight(tasks[0], seconds => {
+      if (seconds >= 2) onProgress(`Waiting for the first bytes from ${probeHost}…`);
+    });
     const queued = [first];
 
     const rest = tasks.slice(1);
@@ -2581,18 +2696,19 @@
       groups.get(folder).push(task);
     });
 
-    onProgress('Connecting to your JDownloader…');
+    onProgress('Connecting to My.JDownloader…');
     await myjdEnsureSession();
 
     let sent = 0;
     let packages = 0;
+    let finished = 0;
     const failures = [];
     const groupList = [...groups.entries()];
+    onProgress(`Sending ${groupList.length} package(s)…`);
 
-    for (let i = 0; i < groupList.length; i++) {
-      const [folder, groupTasks] = groupList[i];
-      onProgress(`Sending package ${i + 1} of ${groupList.length}…`);
-
+    // One package per folder; each is a round-trip through the My.JDownloader
+    // relay, so send a few at once instead of strictly one after another.
+    await parallelFetch(groupList.map(([folder, groupTasks]) => async () => {
       try {
         await myjdDeviceAction(deviceId, '/linkgrabberv2/addLinks', [{
           links: groupTasks.map(task => task.url).join('\n'),
@@ -2609,7 +2725,9 @@
         failures.push({ folder, count: groupTasks.length, error: error.message });
         console.warn(`[MyJD] Package "${folder}" failed:`, error.message);
       }
-    }
+      finished++;
+      onProgress(`Sent ${finished} of ${groupList.length} package(s)…`);
+    }), 4);
 
     if (!sent) {
       throw new Error(`JDownloader rejected every package. First error: ${failures[0] ? failures[0].error : 'unknown'}`);
@@ -4725,6 +4843,38 @@ exit 0
   // The one place a server transfer actually happens: destination picker, then
   // whichever transport is configured, then reporting. Both the "send all" and
   // "choose what to send" paths go through here so they can't drift apart.
+  // Small floating status for a running send: spinner, current step and how
+  // long it has been going, so a slow step never looks like a hang — and the
+  // "choose what to send" path (whose dialog is already closed) still shows progress.
+  function showTransferStatus() {
+    ensureProgressStyles();
+    const isDark = isDarkTheme();
+    const el = document.createElement('div');
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.style.cssText = `
+      position: fixed; bottom: 20px; right: 20px; z-index: ${Z_TOP - 1}; max-width: 360px;
+      display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 12px;
+      background: ${isDark ? '#1c1c1c' : '#fff'}; color: ${isDark ? '#e5e7eb' : '#111827'};
+      border: 1px solid ${isDark ? '#2a2a2a' : '#e5e7eb'}; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      font: 13px system-ui, sans-serif;`;
+    el.innerHTML = `
+      <span style="width:14px; height:14px; flex-shrink:0; border-radius:50%; border:2px solid ${getTheme().primary};
+        border-right-color: transparent; animation: pulsegrab-spin .8s linear infinite;"></span>
+      <span class="pg-ts-text" style="flex:1;"></span>
+      <span class="pg-ts-time" style="font-size:11px; color:${isDark ? '#6b7280' : '#9ca3af'};"></span>`;
+    document.body.appendChild(el);
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const seconds = Math.round((Date.now() - started) / 1000);
+      el.querySelector('.pg-ts-time').textContent = seconds >= 2 ? `${seconds}s` : '';
+    }, 500);
+    return {
+      set(text) { el.querySelector('.pg-ts-text').textContent = text; },
+      close() { clearInterval(timer); el.remove(); }
+    };
+  }
+
   async function runServerTransfer(items, server, token, onLabel = () => {}) {
     if (!remoteTargetConfigured()) {
       showNotification('Let’s get your server set up first — this takes a couple of minutes.', 'info', 5000);
@@ -4738,9 +4888,12 @@ exit 0
       if (overrides === null) return false; // cancelled — nothing queued
     }
 
+    const status = showTransferStatus();
+    const label = message => { status.set(message); onLabel(message); };
+
     try {
       if (remoteMethod() === 'myjd') {
-        const result = await sendToMyJDownloader(items, server, token, onLabel, overrides);
+        const result = await sendToMyJDownloader(items, server, token, label, overrides);
         const notes = [];
         if (result.subtitleCount) notes.push(`${result.subtitleCount} subtitle file(s) included`);
         if (result.unresolvable) notes.push(`${result.unresolvable} had no download URL`);
@@ -4754,6 +4907,7 @@ exit 0
         return true;
       }
 
+      label(`Connecting to aria2 at ${remoteHost()}…`);
       const health = await testRemoteConnection();
       if (!health.hookInstalled) {
         showNotification(
@@ -4764,7 +4918,8 @@ exit 0
         );
       }
 
-      const result = await sendToRemoteServer(items, server, token, onLabel, overrides);
+      const result = await sendToRemoteServer(items, server, token, label, overrides);
+      status.close();
       const notes = [];
       if (result.subtitleCount) notes.push(`${result.subtitleCount} subtitle file(s) included`);
       if (result.alreadyQueued) notes.push(`${result.alreadyQueued} were already queued and skipped`);
@@ -4783,6 +4938,8 @@ exit 0
     } catch (error) {
       showNotification(error.message, 'error', 10000);
       return false;
+    } finally {
+      status.close();
     }
   }
 
@@ -14991,6 +15148,12 @@ animation: fadeIn 0.3s ease;
         });
       }
       createButton();
+      if (justUpdatedFrom && UpdateChecker.isNewer(SCRIPT_VERSION, justUpdatedFrom)) {
+        GM_deleteValue('pulse_pendingUpdate');
+        GM_setValue('pulse_lastUpdateResult', null);
+        showNotification(`PulseGrab updated to v${SCRIPT_VERSION} (from v${justUpdatedFrom}).`, 'success', 6000);
+        justUpdatedFrom = null;
+      }
       if (GM_getValue('pulse_notice_skip_reset', false)) {
         GM_deleteValue('pulse_notice_skip_reset');
         showNotification('PulseGrab 1.4: "Skip previously downloaded" now really works, so it was switched off once — history from older versions listed things you only scanned, so it no longer counts. Turn it back on in Settings → Filters & History.', 'info', 12000);

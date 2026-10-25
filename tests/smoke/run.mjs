@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMock, requests } from './mock-emby.mjs';
 import { startPlexMock } from './mock-plex.mjs';
+import { startAria2Mock, aria2Calls } from './mock-aria2.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = readFileSync(join(HERE, '../../releases/PulseGrab.user.js'), 'utf8');
@@ -28,9 +29,19 @@ const preamble = seed => `
   // Stand-in for the folder picker: the origin-private file system has the same
   // FileSystemDirectoryHandle API, so the real streaming path runs unchanged.
   if (${JSON.stringify(!!seed.__opfs)}) window.showDirectoryPicker = () => navigator.storage.getDirectory();
+  window.__opened = [];
+  window.open = (url) => { window.__opened.push(url); return {}; };
   window.GM_xmlhttpRequest = o => {
-    fetch(o.url, { method: o.method || 'GET', headers: o.headers, body: o.data })
-      .then(async r => o.onload && o.onload({ status: r.status, statusText: r.statusText, responseText: await r.text() }))
+    // GitHub is replaced by the mock so the update flow runs offline.
+    const url = String(o.url)
+      .replace('https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/releases/', location.origin + '/__raw/')
+      .replace('https://api.github.com/repos/h3x4d3x4/PulseGrab/releases/latest', location.origin + '/__api/releases/latest');
+    fetch(url, { method: o.method || 'GET', headers: o.headers, body: o.data })
+      .then(async r => {
+        const text = await r.text();
+        if (o.onprogress) o.onprogress({ lengthComputable: true, loaded: text.length, total: text.length });
+        if (o.onload) o.onload({ status: r.status, statusText: r.statusText, responseText: text });
+      })
       .catch(e => o.onerror && o.onerror({ error: String(e) }));
   };
   if (location.port === '32400') { localStorage.setItem('myPlexAccessToken', 'PLEXTOKEN'); }
@@ -98,6 +109,7 @@ const expectEq = (actual, expected, what) => { if (actual !== expected) throw ne
 
 const mock = await startMock(PORT);
 const plex = await startPlexMock(32400);
+const aria2 = await startAria2Mock(16800);
 const profile = mkdtempSync(join(tmpdir(), 'pg-smoke-'));
 const downloads = mkdtempSync(join(tmpdir(), 'pg-dl-'));
 const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`,
@@ -208,6 +220,34 @@ try {
     expectEq((await scan('#!/server/abc/details?key=%2Flibrary%2Fmetadata%2F100', {}, PLEX)).count, 3, 'episodes');
   });
 
+  await check('update: check finds v99, panel downloads, verifies and hands off to the manager', async () => {
+    await open('#!/item?id=m1');
+    await evaluate(`document.getElementById('pulseDlSettings').click()`);
+    await waitFor(`!!document.getElementById('check-updates-now')`, 5000, 'check button');
+    await evaluate(`document.getElementById('check-updates-now').click()`);
+    await waitFor(`/v99\\.0\\.0 Available/.test(document.getElementById('pulsegrab-update-banner')?.innerText || '')`, 8000, 'update banner');
+    await evaluate(`document.getElementById('pulsegrab-install-update').click()`);
+    await waitFor(`/confirm in/i.test(document.getElementById('pulsegrab-update-banner')?.innerText || '')`, 8000, 'hand-off step');
+    const opened = await evaluate(`window.__opened`);
+    if (!opened.some(u => u === 'https://raw.githubusercontent.com/h3x4d3x4/PulseGrab/main/releases/PulseGrab.user.js')) throw new Error(`installer URL not opened: ${opened}`);
+  });
+
+  await check('send to my server (aria2): status pill, phases, queued + panel', async () => {
+    // The script refuses loopback sources (another machine can't reach them), so
+    // serve the fake Emby under a *.localhost name — Chrome still resolves it locally.
+    await scan('#!/item?id=series1', { remoteMethod: 'aria2', remoteHost: '127.0.0.1', remotePort: 16800, remoteSecret: 'SECRET', remoteAskDestination: false, remoteLibraryDir: '/downloads' }, `http://emby.localhost:${PORT}/web/index.html`);
+    aria2Calls.length = 0;
+    await evaluate(`window.__seen = new Set(); new MutationObserver(() => { document.querySelectorAll('.pg-ts-text, .pulse-dl-notification').forEach(e => e.textContent && window.__seen.add(e.textContent.trim())); }).observe(document.body, { subtree: true, childList: true, characterData: true })`);
+    await evaluate(`document.getElementById('send-my-server').click()`);
+    await waitFor(`/Queued 6 file/.test(document.body.innerText)`, 15000, 'queued notification')
+      .catch(async e => { throw new Error(`${e.message}; seen: ${JSON.stringify(await evaluate('[...window.__seen]'))}; aria2: ${aria2Calls.join(',')}`); });
+    await waitFor(`/Transferring to your server/.test(document.body.innerText)`, 5000, 'transfer panel');
+    const seen = await evaluate(`[...window.__seen]`);
+    if (!seen.some(t => /Connecting to aria2/.test(t))) throw new Error(`status pill never showed the connect step: ${JSON.stringify(seen)}`);
+    if (await evaluate(`!!document.querySelector('.pg-ts-text')`)) throw new Error('status pill still on screen after queueing');
+    expectEq(aria2Calls.filter(m => m === 'aria2.addUri').length, 6, 'files added to aria2');
+  });
+
   await check('settings: every section renders and saves', async () => {
     await open('#!/item?id=m1');
     await evaluate(`document.getElementById('pulseDlSettings').click()`);
@@ -233,7 +273,7 @@ try {
     if (!(await evaluate(`document.querySelectorAll('img[src="x"]').length === 0`))) throw new Error('hostile <img> was inserted into the DOM');
   });
 } finally {
-  ws?.close(); chrome.kill('SIGKILL'); mock.close(); plex.close();
+  ws?.close(); chrome.kill('SIGKILL'); mock.close(); plex.close(); aria2.close();
   rmSync(profile, { recursive: true, force: true }); rmSync(downloads, { recursive: true, force: true });
 }
 

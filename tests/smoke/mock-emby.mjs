@@ -37,6 +37,12 @@ export function startMock(port) {
     const p = url.pathname;
     requests.push(p + url.search);
     const json = body => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
+    // Stand-ins for GitHub: the published script header and the release notes.
+    if (p === '/__raw/PulseGrab.user.js') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end('// ==UserScript==\n// @name PulseGrab\n// @version      99.0.0\n// ==/UserScript==\n' + '// padding\n'.repeat(2000));
+    }
+    if (p === '/__api/releases/latest') return json({ tag_name: 'v99.0.0', body: 'Big release\nLine two', html_url: 'https://example.invalid/r' });
     if (p === '/web/index.html' || p === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(PAGE); }
     if (url.searchParams.get('api_key') !== 'TESTTOKEN' && p.startsWith('/emby/')) { res.writeHead(401); return res.end('no'); }
     let m;
