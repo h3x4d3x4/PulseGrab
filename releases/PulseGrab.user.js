@@ -202,7 +202,7 @@
     wholeShowConfirmThreshold: 50,
     seasonDelayMs: 200,
     keyboardShortcut: 'KeyD', // Ctrl+D
-    // NEW v6.50: Performance improvements
+    // Performance improvements
     parallelSeasonFetches: 5,  // Number of concurrent season fetches
     cacheTTL: 300000,  // Cache TTL: 5 minutes (300000ms)
     enableRequestCache: true,
@@ -224,7 +224,7 @@
       timeout: 10000, // 10 seconds for more reliable detection
       batchSize: 500  // Send in chunks to avoid overwhelming JD
     },
-    // NEW v1.1.0: Server-to-server transfer via an aria2 daemon on the destination box
+    // Server-to-server transfer via an aria2 daemon on the destination box
     remote: {
       defaultPort: 6800,
       timeout: 15000,
@@ -268,9 +268,9 @@
       theme: 'auto',
       darkMode: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches,
       jdownloaderEnabled: false,
-      jdownloaderHost: '',   // NEW v1.1.0: blank = local (127.0.0.1 / localhost)
+      jdownloaderHost: '',   // blank = local (127.0.0.1 / localhost)
       jdownloaderPort: 9666,
-      // NEW v1.1.0: "Send to My Server".
+      // "Send to My Server".
       // 'myjd'  — MyJDownloader cloud relay: no ports, no server-side config.
       // 'aria2' — direct JSON-RPC to an aria2 daemon on the destination.
       remoteMethod: 'myjd',
@@ -293,22 +293,22 @@
       skipDownloaded: false,
       enableHistory: true,
       debugMode: false,
-      // NEW v6.50: Performance settings
+      // Performance settings
       enableRequestCache: true,
       enableParallelFetching: true,
       parallelSeasonFetches: 5,
-      concurrentDownloads: 3,  // NEW v6.54: Changed default from 2 to 3
+      concurrentDownloads: 3,  // Changed default from 2 to 3
       filterOptions: {
         minQuality: null,  // '720p', '1080p', '4K'
         maxFileSize: null, // in GB
         excludeSubtitles: false,
-        // NEW v6.55: Exclude extras
+        // Exclude extras
         excludeExtras: false
       },
-      // NEW v6.58: Custom Filename Templates
+      // Custom Filename Templates
       filenameTemplateEpisode: '{Series} - S{season}E{episode} - {Title}',
       filenameTemplateMovie: '{Title} ({Year})',
-      // NEW v1.1.0: Top-level library folder names. Defaults match the usual
+      // Top-level library folder names. Defaults match the usual
       // Emby/Jellyfin/Plex layout, but plenty of libraries are named in another
       // language ("Filmes"/"Series") — writing to "Movies"/"TV Shows" there just
       // creates folders the media server never scans.
@@ -328,7 +328,7 @@
       pinnedFolders: '',
       // One rule per line, "text I match on => folder". First match wins.
       destinationRules: '',
-      // NEW v1.1.0: your OWN media server, used to discover real library names
+      // your OWN media server, used to discover real library names
       // and browse folders. Optional — everything still works by typing.
       destServerUrl: '',
       destApiKey: '',
@@ -338,10 +338,10 @@
       recentDestinations: '',     // comma-separated, most recent first
       // Ask which folder to use on every send. Off = use the saved defaults.
       remoteAskDestination: true,
-      // NEW v6.59: Subtitle Settings
+      // Subtitle Settings
       dlExternalSubtitles: true,
       subtitleLanguages: '', // Empty = all, or comma separated 'eng,spa'
-      // NEW v1.0.2: In-app update settings
+      // In-app update settings
       autoCheckUpdates: true,
       updateCheckInterval: 24  // hours
     },
@@ -378,6 +378,22 @@
       }
     }
   };
+
+  // One-time cleanup of settings that no longer exist, plus leftover resume-progress keys.
+  try {
+    const stored = JSON.parse(GM_getValue('pulse_dl_settings', '{}'));
+    const removed = ['batchSize', 'enableBackgroundPrefetch', 'enableResume', 'enableJDownloaderAutoDetect',
+      'showResultsDialog', 'compactMode', 'enableRateLimit', 'emulateClient', 'bypassMode', 'forceDirectPlay']
+      .filter(k => stored && typeof stored === 'object' && k in stored);
+    if (removed.length) {
+      removed.forEach(k => delete stored[k]);
+      GM_setValue('pulse_dl_settings', JSON.stringify(stored));
+    }
+    (typeof GM_listValues === 'function' ? GM_listValues() : [])
+      .filter(k => k.startsWith('pulse_dl_progress_')).forEach(k => GM_deleteValue(k));
+  } catch (e) {
+    console.warn('Settings cleanup skipped:', e);
+  }
 
   // ---------- Version Check & Cache Buster ----------
   // Moved here to ensure Settings object is initialized before logDebug is called
@@ -683,7 +699,7 @@
     }
   };
 
-  // ---------- NEW v6.50: Request Cache System ----------
+  // ---------- Request Cache System ----------
   const RequestCache = {
     get(key) {
       if (!Settings.get('enableRequestCache')) return null;
@@ -794,7 +810,7 @@
       if (!filters) return items;
 
       return items.filter(item => {
-        // NEW v6.55: Minimum file size filter
+        // Minimum file size filter
         if (filters.minFileSize && item.Size) {
           const minBytes = filters.minFileSize * 1024 * 1024 * 1024;
           if (item.Size < minBytes) {
@@ -824,7 +840,7 @@
           }
         }
 
-        // NEW v6.55: Exclude extras (trailers, behind-the-scenes, etc.)
+        // Exclude extras (trailers, behind-the-scenes, etc.)
         if (filters.excludeExtras && item.ExtraType) {
           logDebug(`[Filter] Excluding ${item.Name} - extra type: ${item.ExtraType}`);
           return false;
@@ -1105,7 +1121,7 @@
   };
 
   // ---------- Helper Functions ----------
-  // NEW v6.58: GM_xmlhttpRequest wrapper for Mixed Content support
+  // GM_xmlhttpRequest wrapper for Mixed Content support
   function gmFetch(url, options = {}) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
@@ -1242,7 +1258,7 @@
     return deduplicated;
   }
 
-  // NEW v6.50: Parallel request helper with concurrency control
+  // Parallel request helper with concurrency control
   async function parallelFetch(tasks, concurrency = 5, onProgress = null) {
     const results = [];
     const executing = [];
@@ -1469,12 +1485,12 @@
       folderPath,
       fullPath: folderPath ? `${folderPath}/${filename}` : filename,
       displayName: displayName,
-      // NEW v6.59: Pass subtitle info if enabled
+      // Pass subtitle info if enabled
       subtitles: subtitles
     };
   }
 
-  // NEW v6.59: Subtitle Extraction Helper
+  // Subtitle Extraction Helper
   function EXTRACT_SUBTITLES(item, videoFilename, server = null, token = null) {
     if (!Settings.get('dlExternalSubtitles')) return [];
     if (!item.MediaSources || !item.MediaSources.length) return [];
@@ -1551,7 +1567,7 @@
   // though JD is running. Try 127.0.0.1 first, fall back to localhost, and
   // remember whichever host actually answered. (Both are in @connect.)
   //
-  // NEW v1.1.0: a custom host may be set (jdownloaderHost) to reach a JDownloader
+  // a custom host may be set (jdownloaderHost) to reach a JDownloader
   // running on another machine — e.g. the JDownloader2 app on a NAS. Note that JD
   // binds the FlashGot/CnL listener to loopback by default: the remote instance
   // needs `Advanced Settings → RemoteAPI: ExternInterfaceLocalhostOnly` set to
@@ -4485,7 +4501,7 @@ exit 0
 
   // Escape closes the topmost dialog only — the folder browser opens on top of
   // the destination picker, and closing both at once would lose the user's work.
-  // Capture phase so this wins over the global Escape handler.
+  // Capture phase so it runs before the page's own Escape handlers.
   function closeOnEscape(overlay, closeFn) {
     overlay.dataset.pgOverlay = '1';
     const handler = event => {
@@ -6211,7 +6227,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
       flex-direction: column;
       
     `;
-    logDebug('[DownloadManager] Created manager with dimensions - max-width: 1200px, width: 98%, max-height: 96vh, min-height: 80vh');
 
     // Apply dark mode immediately if enabled
     if (Settings.get('darkMode')) {
@@ -6295,7 +6310,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
     let statusFilter = 'all'; // Track status tab filter: 'all'|'downloading'|'paused'|'completed'|'error'|'pending'
     const userAbortedIndices = new Set(); // Track indices aborted by user (vs global pause)
 
-    // NEW v6.54: Concurrent downloads support
+    // Concurrent downloads support
     const activeDownloads = new Map(); // Map<index, {abortController, startTime}>
     const maxConcurrentDownloads = Settings.get('concurrentDownloads') || 3;
 
@@ -7310,12 +7325,12 @@ Note: If blocked, right-click → Open, or run in Terminal:
         return;
       }
 
-      // NEW v6.54: Check if already downloading
+      // Check if already downloading
       if (activeDownloads.has(index)) {
         return; // Already downloading this item
       }
 
-      // NEW v6.54: Check concurrent download limit
+      // Check concurrent download limit
       if (activeDownloads.size >= maxConcurrentDownloads) {
         return; // Wait for a slot to free up
       }
@@ -7465,7 +7480,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
         // History records real downloads only (not scans)
         DownloadHistory.mark([item.downloadInfo?._rawItem || { Id: item.id, Name: item.name, Size: item.size }]);
 
-        // NEW v6.59: Download Subtitles
+        // Download Subtitles
         if (item.downloadInfo && item.downloadInfo.subtitles && item.downloadInfo.subtitles.length > 0) {
           for (const sub of item.downloadInfo.subtitles) {
             try {
@@ -7480,21 +7495,21 @@ Note: If blocked, right-click → Open, or run in Terminal:
           }
         }
 
-        // NEW v6.54: Remove from active downloads
+        // Remove from active downloads
         activeDownloads.delete(index);
 
         renderQueue();
         updateDownloadInfo();
         saveState();
 
-        // NEW v6.54: Try to start next downloads with a slight delay to avoid server stream limits
+        // Try to start next downloads with a slight delay to avoid server stream limits
         if (!isPaused && !downloadSingleItem) {
           setTimeout(() => startNextDownload(), 1500);
         } else if (downloadSingleItem) {
           downloadSingleItem = false;
         }
 
-        // NEW v6.54: Check if all downloads are complete
+        // Check if all downloads are complete
         if (activeDownloads.size === 0 && downloadQueue.every(i => i.status !== 'downloading')) {
           isDownloading = false;
           const completed = downloadQueue.filter(i => i.status === 'completed').length;
@@ -7580,7 +7595,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       }
     }
 
-    // NEW v6.54: Helper function to start next pending downloads
+    // Helper function to start next pending downloads
     function startNextDownload() {
       // Fill up to maxConcurrentDownloads
       while (activeDownloads.size < maxConcurrentDownloads && !isPaused) {
@@ -7641,14 +7656,14 @@ Note: If blocked, right-click → Open, or run in Terminal:
 
       saveState();
       isDownloading = true;
-      // NEW v6.54: Start multiple downloads concurrently
+      // Start multiple downloads concurrently
       startNextDownload();
       renderQueue();
     });
 
     manager.querySelector('#pause-all').addEventListener('click', () => {
       isPaused = true;
-      // NEW v6.54: Abort all active downloads
+      // Abort all active downloads
       for (const [index, download] of activeDownloads.entries()) {
         download.abortController.abort();
       }
@@ -7708,7 +7723,7 @@ Note: If blocked, right-click → Open, or run in Terminal:
       renderQueue();
       saveState();
 
-      // NEW v6.54: Start downloading selected items (concurrent)
+      // Start downloading selected items (concurrent)
       isDownloading = true;
       startNextDownload();
     });
@@ -8142,18 +8157,6 @@ Note: If blocked, right-click → Open, or run in Terminal:
     // No need to call renderQueue() here - already called after setupHandlers() above
     overlay.appendChild(manager);
     document.body.appendChild(overlay);
-
-    // Log actual computed dimensions after adding to DOM
-    setTimeout(() => {
-      const computedStyle = window.getComputedStyle(manager);
-      logDebug('[DownloadManager] Manager actual dimensions:', {
-        width: computedStyle.width,
-        height: computedStyle.height,
-        maxWidth: computedStyle.maxWidth,
-        maxHeight: computedStyle.maxHeight,
-        padding: computedStyle.padding
-      });
-    }, 100);
 
     // Auto-start if there are actually resumeable downloads (has progress or was recently active)
     const hasResumeableDownloads = downloadQueue.some(i =>
@@ -9109,7 +9112,7 @@ animation: fadeIn 0.3s ease;
             </div>
           </div>
           
-          <!-- My Server Section (NEW v1.1.0) -->
+          <!-- My Server Section -->
           <div id="panel-myserver" class="settings-panel-section" style="display: none;">
             <h2 class="settings-section-title">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"></rect><rect x="2" y="14" width="20" height="8" rx="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
@@ -9809,7 +9812,7 @@ animation: fadeIn 0.3s ease;
       }, 5000);
     });
 
-    // NEW v6.55: Quality preset buttons
+    // Quality preset buttons
     const qualityPresets = panel.querySelectorAll('.quality-preset');
     qualityPresets.forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -9834,7 +9837,7 @@ animation: fadeIn 0.3s ease;
       });
     });
 
-    // NEW v6.55: File size sliders sync with inputs
+    // File size sliders sync with inputs
     const sizeMinInput = panel.querySelector('#filter-size-min');
     const sizeMaxInput = panel.querySelector('#filter-size-max');
     const sizeMinSlider = panel.querySelector('#filter-size-slider-min');
@@ -9871,7 +9874,7 @@ animation: fadeIn 0.3s ease;
       updateSizeDisplay();
     });
 
-    // NEW v6.55: Filter preview update
+    // Filter preview update
     const updateFilterPreview = () => {
       const previewEl = panel.querySelector('#filter-preview');
       const activeQuality = panel.querySelector('.quality-preset.active')?.getAttribute('data-quality');
@@ -10218,13 +10221,13 @@ animation: fadeIn 0.3s ease;
           const debugMode = settingsPanel.querySelector('#debug-mode').checked;
           const concurrentDownloads = parseInt(settingsPanel.querySelector('#concurrent-downloads').value) || 3;
 
-          // NEW v6.55: Enhanced filter options
+          // Enhanced filter options
           const filterQuality = settingsPanel.querySelector('.quality-preset.active')?.getAttribute('data-quality') || null;
           const filterSizeMin = parseFloat(settingsPanel.querySelector('#filter-size-min').value) || null;
           const filterSizeMax = parseFloat(settingsPanel.querySelector('#filter-size-max').value) || null;
           const filterExcludeExtras = settingsPanel.querySelector('#filter-exclude-extras').checked;
 
-          // NEW v6.58: Filename Templates
+          // Filename Templates
           const filenameTemplateEpisode = settingsPanel.querySelector('#filename-template-episode').value;
           const filenameTemplateMovie = settingsPanel.querySelector('#filename-template-movie').value;
 
@@ -10238,7 +10241,7 @@ animation: fadeIn 0.3s ease;
           Settings.set('jdownloaderHost', jdownloaderHost);
           Settings.set('jdownloaderPort', Math.max(1, Math.min(65535, jdownloaderPort || CONFIG.jdownloader.defaultPort)));
 
-          // NEW v1.1.0: My Server — same normalisation the Test/Connect buttons use.
+          // My Server — same normalisation the Test/Connect buttons use.
           applyRemoteSettingsFromPanel(settingsPanel);
           applyMyjdSettingsFromPanel(settingsPanel);
 
@@ -10246,7 +10249,7 @@ animation: fadeIn 0.3s ease;
           if (filenameTemplateEpisode) Settings.set('filenameTemplateEpisode', filenameTemplateEpisode);
           if (filenameTemplateMovie) Settings.set('filenameTemplateMovie', filenameTemplateMovie);
 
-          // NEW v1.1.0: library folder names (blank falls back to the default).
+          // library folder names (blank falls back to the default).
           [
             ['#library-folder-movies', 'libraryFolderMovies', 'Movies'],
             ['#library-folder-shows', 'libraryFolderShows', 'TV Shows'],
@@ -10280,7 +10283,7 @@ animation: fadeIn 0.3s ease;
           const destKey = settingsPanel.querySelector('#dest-api-key');
           if (destKey) Settings.set('destApiKey', destKey.value.trim());
 
-          // NEW v6.59: Save Subtitle Settings
+          // Save Subtitle Settings
           const dlExternalSubtitles = settingsPanel.querySelector('#dl-external-subtitles').checked;
 
           // Collect checked languages
@@ -10294,7 +10297,7 @@ animation: fadeIn 0.3s ease;
           Settings.set('enableHistory', enableHistory);
           Settings.set('skipDownloaded', skipDownloaded);
           Settings.set('debugMode', debugMode);
-          Settings.set('concurrentDownloads', Math.max(1, Math.min(5, concurrentDownloads))); // NEW v6.54: Save concurrent downloads
+          Settings.set('concurrentDownloads', Math.max(1, Math.min(5, concurrentDownloads))); // Save concurrent downloads
 
           // Update settings
           const autoCheckUpdates = settingsPanel.querySelector('#auto-check-updates').checked;
@@ -10690,7 +10693,7 @@ animation: fadeIn 0.3s ease;
                                 <li>Navigate to a movie, TV show, season, or collection page on your media server.</li>
                                 <li>Press <strong>Ctrl+D</strong> or click the floating "Get Links" button.</li>
                                 <li>Choose your preferred output format or use the built-in Download Manager.</li>
-                                <li>Links are automatically generated and copied to your clipboard.</li>
+                                <li>When the scan finishes, a results dialog lets you copy the links, save a script, or send them to a server.</li>
                               </ol>
                             </div>
                           </details>
@@ -11215,7 +11218,7 @@ animation: fadeIn 0.3s ease;
     setTimeout(() => dialog.querySelector('#confirm-proceed').focus(), 100);
   }
 
-  // NEW v1.0: Options dialog for whole server download
+  // Options dialog for whole server download
   function showServerDownloadOptionsDialog(libraries, onConfirm, onCancel) {
     const overlay = document.createElement('div');
     overlay.className = 'pg-overlay';
@@ -11418,7 +11421,7 @@ animation: fadeIn 0.3s ease;
     document.body.appendChild(overlay);
   }
 
-  // NEW v1.0: Helper to inject filename directly into the directplay URL for universal bypass mapping.
+  // Helper to inject filename directly into the directplay URL for universal bypass mapping.
   // This guarantees that ANY client (curl, wget, email links, IDM) downloading the raw link 
   // will receive the correctly routed bypass stream natively stamped with the right filename.
   function getFullBypassUrl(item, server, token) {
@@ -11927,7 +11930,7 @@ animation: fadeIn 0.3s ease;
         throw new Error('No media libraries found on server');
       }
 
-      // NEW v1.0: Server Options Dialog
+      // Server Options Dialog
       const { selectedLibIds, options } = await new Promise((resolve) => {
         showServerDownloadOptionsDialog(
           mediaLibraries,
@@ -13079,7 +13082,7 @@ animation: fadeIn 0.3s ease;
 
     const url = `${server}${prefix}/Shows/${encodeURIComponent(showId)}/Episodes?${params.toString()}`;
 
-    // NEW v6.50: Check cache first
+    // Check cache first
     const cacheKey = RequestCache.makeKey(url);
     const cached = RequestCache.get(cacheKey);
     if (cached) {
@@ -13668,7 +13671,7 @@ animation: fadeIn 0.3s ease;
 
             logDebug(`[Debug] Series ${series.Name}: Found ${seasons.length} seasons`);
 
-            // NEW v6.50: Fetch episodes in parallel if enabled
+            // Fetch episodes in parallel if enabled
             let seriesEpisodes = [];
             if (Settings.get('enableParallelFetching') && seasons.length > 1) {
               const concurrency = Settings.get('parallelSeasonFetches') || CONFIG.parallelSeasonFetches;
@@ -13864,7 +13867,7 @@ animation: fadeIn 0.3s ease;
         logDebug(`[Debug] Album expansion complete: ${totalTracksFromAlbums} tracks from ${albumItems.length} albums`);
       }
 
-      // NEW v6.52: Process regular Folders (recursive scan)
+      // Process regular Folders (recursive scan)
       const folderItems = items.filter(item => item.Type === 'Folder' && item.IsFolder);
       if (folderItems.length > 0) {
         updateProgress(0, folderItems.length, "Scanning subfolders...");
